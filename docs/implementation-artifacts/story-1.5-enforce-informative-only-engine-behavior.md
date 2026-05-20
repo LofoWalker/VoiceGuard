@@ -1,6 +1,6 @@
 # Story 1.5: Enforce Informative-Only Engine Behavior for Phase 1
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -15,11 +15,11 @@ so that the system informs human judgment without taking irreversible action on 
 
 ## Tasks / Subtasks
 
-- [ ] Audit all domain and rules packages: assert no `android.*`, `telephony.*`, or call-control import exists (AC: 2)
-- [ ] Add an automated build check or test that fails if any Android SDK dependency is introduced into `domain/` or `rules/` (AC: 2)
-- [ ] Document in `DetectionOrchestrator` KDoc that the engine is informative-only and never triggers call actions (AC: 1)
-- [ ] Verify `DetectionUiState` exposes only informational fields — no action flags or call-control hooks (AC: 1)
-- [ ] Write a compile-time or test-level assertion verifying the domain module gradle configuration excludes Android SDK (AC: 2)
+- [x] Audit all domain and rules packages: assert no `android.*`, `telephony.*`, or call-control import exists (AC: 2)
+- [x] Add an automated build check or test that fails if any Android SDK dependency is introduced into `domain/` or `rules/` (AC: 2)
+- [x] Document in `DetectionOrchestrator` KDoc that the engine is informative-only and never triggers call actions (AC: 1)
+- [x] Verify `DetectionUiState` exposes only informational fields — no action flags or call-control hooks (AC: 1)
+- [x] Write a compile-time or test-level assertion verifying the domain module gradle configuration excludes Android SDK (AC: 2)
 
 ## Dev Notes
 
@@ -44,10 +44,19 @@ so that the system informs human judgment without taking irreversible action on 
 ## Dev Agent Record
 
 ### Agent Model Used
+claude-sonnet-4-5
 
 ### Debug Log References
+None.
 
 ### Completion Notes List
+- AC-1: `DetectionOrchestrator` KDoc updated with explicit "Informative-only" statement and reference to PRD Phase 1 / ADR-01.
+- AC-1: `DetectionUiState` KDoc updated with "Informative-only" contract; test asserts no call-action field name exists now or in future.
+- AC-2: `DomainScopeComplianceTest` verifies: no `android.content.Context` or `android.telecom.*` on classpath, no Android supertype on domain classes, `build.gradle.kts` free of `com.android` declarations, `DetectionUiState` fields match exactly the three expected informational fields.
+- Audit result: zero Android/telephony imports found across domain and service packages.
 
 ### File List
-
+- `voiceguard-engine/src/main/kotlin/com/voiceguard/domain/model/DetectionUiState.kt` (KDoc updated)
+- `voiceguard-engine/src/main/kotlin/com/voiceguard/domain/service/DetectionOrchestrator.kt` (KDoc updated)
+- `voiceguard-engine/src/test/kotlin/com/voiceguard/domain/DomainScopeComplianceTest.kt` (new)
+- `docs/implementation-artifacts/story-1.5-enforce-informative-only-engine-behavior.md` (updated)
