@@ -25,3 +25,33 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// ---------------------------------------------------------------------------
+// validateEngine — Story 3.4: Gradle-triggered validation workflow
+//
+// Streams a local dataset directory through the full engine pipeline and
+// prints an accuracy / FPR / latency report to stdout.
+//
+// Usage:
+//   ./gradlew :voiceguard-engine:validateEngine -PdatasetPath=/path/to/dataset
+//
+// Dataset directory must contain `real/` (or `human/`) and `fake/` (or `ai/`)
+// subdirectories holding 16-bit mono 16 kHz WAV files.
+//
+// Scope: JVM only — no Android Gradle plugin or instrumented test dependency.
+// ---------------------------------------------------------------------------
+tasks.register<JavaExec>("validateEngine") {
+    group = "verification"
+    description = "Runs the dataset validation harness and prints detection KPI metrics."
+
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.voiceguard.harness.ValidationRunner")
+
+    val datasetPath: String? = findProperty("datasetPath") as String?
+    if (datasetPath != null) {
+        args(datasetPath)
+    }
+    // If not provided, ValidationRunner.main() will print a clear error and exit.
+
+    dependsOn(tasks.named("classes"))
+}
+
