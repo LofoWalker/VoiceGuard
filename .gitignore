@@ -32,6 +32,22 @@ captures/
 .externalNativeBuild/
 .cxx/
 
+# ===========================
+# IntelliJ IDEA / Android Studio
+# ===========================
+.idea/
+*.iws
+*.iml
+*.ipr
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/modules.xml
+.idea/navEditor.xml
 
 # ===========================
 # TFLite / ML models (binaires)
