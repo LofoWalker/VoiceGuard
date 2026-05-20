@@ -12,6 +12,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Central orchestrator for real-time AI voice detection.
@@ -26,6 +28,9 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * **Monotone confidence (ADR-02):** [DetectionUiState.globalConfidence] advances via a
  * one-way ratchet — [peakConfidence] is never allowed to decrease, preventing gauge oscillation.
+ *
+ * **Thread-safety:** External callers may invoke [processChunk] concurrently; execution is
+ * serialized with an internal mutex so elapsed-time and confidence state remain coherent.
  *
  * @param rules      Detection rules injected at construction — evaluated in parallel each chunk.
  * @param dispatcher Coroutine dispatcher for rule execution. Supply
@@ -52,6 +57,9 @@ class DetectionOrchestrator(
     // ADR-02: one-way ratchet — globalConfidence never decreases across chunks.
     private var peakConfidence = 0.0f
 
+    // Serializes chunk processing to keep mutable orchestrator state coherent.
+    private val processingMutex = Mutex()
+
     /**
      * Analyses one [AudioChunk], then emits an updated [DetectionUiState].
      *
@@ -62,33 +70,35 @@ class DetectionOrchestrator(
      * 4. [ScoreAggregator] computes raw confidence and AI probability.
      * 5. Monotone ratchet and warm-up gate are applied before [StateFlow] emission.
      */
-    suspend fun processChunk(chunk: AudioChunk) = coroutineScope {
-        val chunkDuration = chunk.pcmData.size.toFloat() / chunk.sampleRate
+    suspend fun processChunk(chunk: AudioChunk) = processingMutex.withLock {
+        coroutineScope {
+            val chunkDuration = chunk.pcmData.size.toFloat() / chunk.sampleRate
 
-        // Rules receive the current context snapshot — no mutations happen during analysis.
-        val ruleResults = rules
-            .map { rule -> async(dispatcher) { rule to rule.analyze(chunk, context) } }
-            .awaitAll()
+            // Rules receive the current context snapshot — no mutations happen during analysis.
+            val ruleResults = rules
+                .map { rule -> async(dispatcher) { rule to rule.analyze(chunk, context) } }
+                .awaitAll()
 
-        // Context mutations strictly after all rules complete (ADR-03).
-        totalElapsedSeconds += chunkDuration
-        context.updateCallDuration((totalElapsedSeconds * 1000).toLong())
+            // Context mutations strictly after all rules complete (ADR-03).
+            totalElapsedSeconds += chunkDuration
+            context.updateCallDuration((totalElapsedSeconds * 1000).toLong())
 
-        val contributions = ruleResults.map { (rule, result) ->
-            RuleContribution(rule.weight, result.suspicionScore, result.confidence)
+            val contributions = ruleResults.map { (rule, result) ->
+                RuleContribution(rule.weight, result.suspicionScore, result.confidence)
+            }
+
+            val rawConfidence = aggregator.computeRawConfidence(contributions)
+            peakConfidence = maxOf(peakConfidence, rawConfidence)
+
+            // Warm-up gate: first second suppressed to avoid unreliable early reads.
+            val globalConfidence = if (totalElapsedSeconds < 1.0f) 0.0f else peakConfidence
+
+            // ADR-04: NaN guard delegated to aggregator; also suppressed during warm-up.
+            val aiProbability = if (globalConfidence < 0.05f) 0.0f
+            else aggregator.computeAiProbability(contributions)
+
+            _state.value = DetectionUiState(globalConfidence, aiProbability, totalElapsedSeconds)
         }
-
-        val rawConfidence = aggregator.computeRawConfidence(contributions)
-        peakConfidence = maxOf(peakConfidence, rawConfidence)
-
-        // Warm-up gate: first second suppressed to avoid unreliable early reads.
-        val globalConfidence = if (totalElapsedSeconds < 1.0f) 0.0f else peakConfidence
-
-        // ADR-04: NaN guard delegated to aggregator; also suppressed during warm-up.
-        val aiProbability = if (globalConfidence < 0.05f) 0.0f
-        else aggregator.computeAiProbability(contributions)
-
-        _state.value = DetectionUiState(globalConfidence, aiProbability, totalElapsedSeconds)
     }
 }
 

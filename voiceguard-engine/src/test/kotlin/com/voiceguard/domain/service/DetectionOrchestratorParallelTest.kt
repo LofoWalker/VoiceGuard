@@ -4,6 +4,8 @@ import com.voiceguard.domain.context.ConversationContext
 import com.voiceguard.domain.model.AudioChunk
 import com.voiceguard.domain.model.RuleResult
 import com.voiceguard.domain.port.AudioDetectionRule
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -144,6 +146,25 @@ class DetectionOrchestratorParallelTest {
         assertEquals(2, observed.size)
         assertTrue(observed.all { it == observed[0] },
             "Both rules must observe the same callDurationMillis — no mid-analysis mutation")
+    }
+
+    // Non-regression: concurrent processChunk calls are serialized by orchestrator internals.
+    @Test
+    fun `concurrent processChunk calls keep elapsed and context duration coherent`() = runTest(dispatcher) {
+        val rule = object : AudioDetectionRule {
+            override val name = "Dummy"
+            override val weight = 1.0f
+            override suspend fun analyze(chunk: AudioChunk, context: ConversationContext) = RuleResult(0.5f, 0.5f)
+        }
+        val orchestrator = DetectionOrchestrator(listOf(rule), dispatcher)
+
+        awaitAll(
+            async { orchestrator.processChunk(HALF_SECOND_CHUNK) },
+            async { orchestrator.processChunk(HALF_SECOND_CHUNK) }
+        )
+
+        assertEquals(1.0, orchestrator.state.value.elapsedSeconds.toDouble(), 0.001)
+        assertEquals(1000L, getContextCallDuration(orchestrator))
     }
 }
 

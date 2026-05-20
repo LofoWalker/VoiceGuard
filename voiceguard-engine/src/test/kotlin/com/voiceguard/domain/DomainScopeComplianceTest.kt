@@ -4,6 +4,7 @@ import com.voiceguard.domain.model.DetectionUiState
 import com.voiceguard.domain.service.DetectionOrchestrator
 import com.voiceguard.domain.service.ScoreAggregator
 import org.junit.jupiter.api.Test
+import java.io.File
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -41,16 +42,19 @@ class DomainScopeComplianceTest {
     }
 
     // AC-2: Domain build.gradle.kts must not declare any Android SDK dependency.
-    // This test reads the Gradle file directly as a textual guard.
+    // This test resolves the engine module gradle file robustly to avoid false-green runs.
     @Test
     fun `build_gradle_kts contains no android dependency declaration (ADR-01)`() {
-        val gradleFile = java.io.File("build.gradle.kts")
-        if (!gradleFile.exists()) return // Guard is best-effort when run outside project root
+        val gradleFile = resolveEngineGradleFile()
+        assertTrue(
+            gradleFile.exists(),
+            "Could not locate engine build.gradle.kts. Tried root/module-relative candidates."
+        )
 
         val content = gradleFile.readText()
         assertFalse(
             content.contains("com.android"),
-            "build.gradle.kts must not declare com.android dependencies in the engine module"
+            "${gradleFile.path} must not declare com.android dependencies in the engine module"
         )
     }
 
@@ -76,8 +80,8 @@ class DomainScopeComplianceTest {
         val fields = DetectionUiState::class.java.declaredFields.map { it.name }.toSet()
         val expected = setOf("globalConfidence", "aiProbability", "elapsedSeconds")
         assertTrue(
-            expected.all { it in fields },
-            "DetectionUiState must contain all three informational fields: $expected. Found: $fields"
+            fields == expected,
+            "DetectionUiState must contain exactly $expected. Found: $fields"
         )
     }
 
@@ -108,6 +112,17 @@ class DomainScopeComplianceTest {
 
         val interfaces = ScoreAggregator::class.java.interfaces.map { it.name }
         assertFalse(interfaces.any { it.startsWith("android.") })
+    }
+
+    private fun resolveEngineGradleFile(): File {
+        val candidates = listOf(
+            File("voiceguard-engine/build.gradle.kts"),
+            File("build.gradle.kts"),
+            File("../voiceguard-engine/build.gradle.kts")
+        )
+        return candidates.firstOrNull { candidate ->
+            candidate.exists() && candidate.readText().contains("kotlinx-coroutines-core")
+        } ?: candidates.first()
     }
 }
 
