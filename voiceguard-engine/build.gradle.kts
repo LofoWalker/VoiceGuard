@@ -16,6 +16,10 @@ repositories {
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 
+    // MP3 decoding via javax.sound.sampled SPI — mp3spi registers itself automatically;
+    // AudioSystem.getAudioInputStream(File) handles both WAV and MP3 transparently.
+    implementation("com.googlecode.soundlibs:mp3spi:1.9.5.4")
+
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")

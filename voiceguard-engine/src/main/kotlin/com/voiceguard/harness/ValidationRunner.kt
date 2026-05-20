@@ -47,6 +47,9 @@ class ValidationRunner(
     /**
      * Runs the full dataset evaluation: streams each file through the engine pipeline,
      * records timing, and returns aggregated [ValidationSummary].
+     *
+     * Files that cannot be decoded (corrupt, unsupported format, empty) are skipped with
+     * a warning printed to stderr — a single bad file never aborts the entire run.
      */
     suspend fun runValidation(): ValidationSummary {
         val audioFiles = scanAudioFiles()
@@ -54,29 +57,32 @@ class ValidationRunner(
         val allChunkLatenciesNs = mutableListOf<Long>()
 
         for ((file, groundTruth) in audioFiles) {
-            val processor = processorFactory()
-            val source = DatasetAudioSource(file)
-            val fileLatenciesNs = mutableListOf<Long>()
+            try {
+                val processor = processorFactory()
+                val source = DatasetAudioSource(file)
+                val fileLatenciesNs = mutableListOf<Long>()
 
-            source.audioStream().onEach { chunk ->
-                val startNs = System.nanoTime()
-                processor.processChunk(chunk)
-                fileLatenciesNs.add(System.nanoTime() - startNs)
-            }.collect()
+                source.audioStream().onEach { chunk ->
+                    val startNs = System.nanoTime()
+                    processor.processChunk(chunk)
+                    fileLatenciesNs.add(System.nanoTime() - startNs)
+                }.collect()
 
-            allChunkLatenciesNs.addAll(fileLatenciesNs)
+                allChunkLatenciesNs.addAll(fileLatenciesNs)
 
-            val finalState = processor.currentState()
-            val engineVerdict = classifyState(finalState)
-            verdicts.add(
-                ValidationVerdict(
-                    filePath = file.absolutePath,
-                    groundTruth = groundTruth,
-                    engineVerdict = engineVerdict,
-                    aiProbability = finalState.aiProbability,
-                    globalConfidence = finalState.globalConfidence
+                val finalState = processor.currentState()
+                verdicts.add(
+                    ValidationVerdict(
+                        filePath = file.absolutePath,
+                        groundTruth = groundTruth,
+                        engineVerdict = classifyState(finalState),
+                        aiProbability = finalState.aiProbability,
+                        globalConfidence = finalState.globalConfidence
+                    )
                 )
-            )
+            } catch (e: Exception) {
+                System.err.println("[VoiceGuard] Skipping ${file.name}: ${e.message}")
+            }
         }
 
         return buildSummary(verdicts, allChunkLatenciesNs)
@@ -147,7 +153,7 @@ class ValidationRunner(
     }
 
     companion object {
-        private val SUPPORTED_EXTENSIONS = setOf("wav", "pcm")
+        private val SUPPORTED_EXTENSIONS = setOf("wav", "mp3", "pcm")
         private val HUMAN_DIR_NAMES = setOf("real", "human")
         private val AI_DIR_NAMES = setOf("fake", "ai", "deepfake")
         private const val NS_TO_MS = 1_000_000.0

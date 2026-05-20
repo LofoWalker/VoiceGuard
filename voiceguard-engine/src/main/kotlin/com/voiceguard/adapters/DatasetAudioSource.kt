@@ -5,19 +5,25 @@ import com.voiceguard.domain.port.AudioSourcePort
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import javax.sound.sampled.AudioFormat
+import javax.sound.sampled.AudioSystem
 
 /**
- * File-based [AudioSourcePort] that reads a WAV or raw PCM file and emits consecutive
+ * File-based [AudioSourcePort] that decodes WAV or MP3 audio and emits consecutive
  * 500 ms [AudioChunk] windows, bypassing any microphone or OS audio capture.
  *
- * Designed for the Phase 1 validation harness: the same file always produces the same
- * byte-identical chunk sequence, guaranteeing deterministic evaluation runs.
+ * Decoding is delegated to [AudioSystem] via the javax.sound.sampled SPI mechanism:
+ * - **WAV** is handled natively by the JVM.
+ * - **MP3** is handled by the `mp3spi` library (com.googlecode.soundlibs:mp3spi) which
+ *   auto-registers itself as an SPI provider — no conditional logic required here.
  *
- * Supported format: 16-bit PCM, mono, 16 kHz (standard telephony format).
- * WAV files are detected by the RIFF header; any other file is treated as raw PCM.
+ * Multi-channel files are reduced to mono by retaining the left (first) channel only,
+ * matching the telephony context where a single speech stream is the norm.
+ *
+ * Replaying the same file always produces an identical [AudioChunk] sequence, guaranteeing
+ * deterministic evaluation runs (AC3 Story 3.1).
  *
  * @param audioFile Source audio file — must exist and be readable.
  */
@@ -29,90 +35,82 @@ class DatasetAudioSource(private val audioFile: File) : AudioSourcePort {
     }
 
     override fun audioStream(): Flow<AudioChunk> = flow {
-        val (pcmBytes, sampleRate) = readPcmBytes(audioFile)
+        val (pcmBytes, sampleRate) = decodeToPcmMono(audioFile)
 
-        // 2 bytes per 16-bit sample; 500 ms window at 16 kHz = 8000 samples = 16000 bytes
-        val samplesPerChunk = sampleRate / 2
-        val bytesPerSample = 2
-        val bytesPerChunk = samplesPerChunk * bytesPerSample
+        // 500 ms window = sampleRate / 2 samples; each sample is 2 bytes (16-bit)
+        val bytesPerChunk = (sampleRate / 2) * 2
 
         var offset = 0
         while (offset < pcmBytes.size) {
             val end = minOf(offset + bytesPerChunk, pcmBytes.size)
-            val chunkBytes = pcmBytes.copyOfRange(offset, end)
-            val samples = chunkBytes.toNormalizedFloats()
-            emit(AudioChunk(pcmData = samples, sampleRate = sampleRate))
+            emit(
+                AudioChunk(
+                    pcmData = pcmBytes.copyOfRange(offset, end).toNormalizedFloats(),
+                    sampleRate = sampleRate
+                )
+            )
             offset = end
         }
     }
 
-    /** Returns raw PCM bytes and the detected sample rate, stripping the WAV header if present. */
-    private fun readPcmBytes(file: File): Pair<ByteArray, Int> {
-        val bytes = file.readBytes()
-        if (isWavFile(bytes)) {
-            return parseWav(bytes)
-        }
-        // Raw PCM: assume 16 kHz
-        return Pair(bytes, DEFAULT_SAMPLE_RATE)
-    }
-
-    private fun isWavFile(bytes: ByteArray): Boolean =
-        bytes.size > 12 &&
-                bytes[0] == 'R'.code.toByte() &&
-                bytes[1] == 'I'.code.toByte() &&
-                bytes[2] == 'F'.code.toByte() &&
-                bytes[3] == 'F'.code.toByte()
-
     /**
-     * Parses the WAV container and returns the raw PCM data bytes along with the sample rate.
-     * Supports standard 16-bit mono PCM WAV (format tag 1).
+     * Decodes the audio file to signed 16-bit little-endian PCM mono using [AudioSystem].
+     *
+     * Two-step conversion when necessary:
+     * 1. Source format → signed 16-bit PCM (preserving channels and sample rate).
+     * 2. Multi-channel → mono by extracting the left channel from each interleaved frame.
      */
-    private fun parseWav(bytes: ByteArray): Pair<ByteArray, Int> {
-        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        // Skip RIFF header: "RIFF" (4) + fileSize (4) + "WAVE" (4)
-        buffer.position(12)
+    private fun decodeToPcmMono(file: File): Pair<ByteArray, Int> {
+        AudioSystem.getAudioInputStream(file).use { sourceStream ->
+            val srcFormat = sourceStream.format
+            val sampleRate = srcFormat.sampleRate.toInt()
 
-        var sampleRate = DEFAULT_SAMPLE_RATE
-        var dataStart = 0
-        var dataSize = 0
+            val pcmFormat = AudioFormat(
+                AudioFormat.Encoding.PCM_SIGNED,
+                srcFormat.sampleRate,
+                BITS_PER_SAMPLE,
+                srcFormat.channels,
+                srcFormat.channels * BYTES_PER_SAMPLE,
+                srcFormat.sampleRate,
+                false  // little-endian — matches ByteBuffer default in toNormalizedFloats()
+            )
 
-        while (buffer.remaining() >= 8) {
-            val chunkId = String(ByteArray(4).also { buffer.get(it) })
-            val chunkSize = buffer.int
-
-            when (chunkId) {
-                "fmt " -> {
-                    buffer.short  // audio format (1 = PCM)
-                    buffer.short  // num channels
-                    sampleRate = buffer.int
-                    // Skip byteRate, blockAlign, bitsPerSample
-                    val remaining = chunkSize - 8
-                    buffer.position(buffer.position() + maxOf(0, remaining))
-                }
-                "data" -> {
-                    dataStart = buffer.position()
-                    dataSize = chunkSize
-                    break
-                }
-                else -> buffer.position(buffer.position() + chunkSize)
+            AudioSystem.getAudioInputStream(pcmFormat, sourceStream).use { pcmStream ->
+                val rawBytes = pcmStream.readBytes()
+                val monoBytes = if (srcFormat.channels > 1)
+                    extractLeftChannel(rawBytes, srcFormat.channels)
+                else
+                    rawBytes
+                return Pair(monoBytes, sampleRate)
             }
         }
-
-        require(dataStart > 0) { "No 'data' chunk found in WAV file: ${audioFile.name}" }
-        val pcmBytes = bytes.copyOfRange(dataStart, minOf(dataStart + dataSize, bytes.size))
-        return Pair(pcmBytes, sampleRate)
     }
 
-    /** Converts 16-bit little-endian PCM bytes to normalized [-1.0, 1.0] floats. */
+    /**
+     * Extracts the left (first) channel from interleaved multi-channel 16-bit PCM bytes.
+     * Each frame contains [channels] samples of [BYTES_PER_SAMPLE] bytes; only the first is kept.
+     */
+    private fun extractLeftChannel(interleaved: ByteArray, channels: Int): ByteArray {
+        val frameSize = channels * BYTES_PER_SAMPLE
+        val frameCount = interleaved.size / frameSize
+        val mono = ByteArray(frameCount * BYTES_PER_SAMPLE)
+        for (i in 0 until frameCount) {
+            val srcIdx = i * frameSize
+            mono[i * 2] = interleaved[srcIdx]
+            mono[i * 2 + 1] = interleaved[srcIdx + 1]
+        }
+        return mono
+    }
+
+    /** Converts 16-bit little-endian PCM bytes to normalized floats in [-1.0, 1.0]. */
     private fun ByteArray.toNormalizedFloats(): FloatArray {
-        val sampleCount = size / 2
         val buffer = ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN)
-        return FloatArray(sampleCount) { buffer.short / SHORT_MAX_VALUE }
+        return FloatArray(size / 2) { buffer.short / SHORT_MAX_VALUE }
     }
 
     companion object {
-        private const val DEFAULT_SAMPLE_RATE = 16_000
+        private const val BITS_PER_SAMPLE = 16
+        private const val BYTES_PER_SAMPLE = 2
         private const val SHORT_MAX_VALUE = 32768f
     }
 }
-
