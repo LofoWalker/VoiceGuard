@@ -69,6 +69,7 @@ class DetectionOrchestrator(
     private val rmsWindow = ArrayDeque<Float>(RMS_WINDOW_SIZE + 1)
     private var previousSwitchCount = 0
     private var previousWindowMeanRms = 0f
+    private var previousChunkWasSilent = false
 
     /**
      * Analyses one [AudioChunk], then emits an updated [DetectionUiState].
@@ -102,7 +103,8 @@ class DetectionOrchestrator(
             val earlyExitActive = alwaysActiveResults
                 .filter { (rule, _) -> rule.isEarlyExitTrigger }
                 .any { (_, result) ->
-                    result.suspicionScore < EARLY_EXIT_SUSPICION_THRESHOLD && result.confidence == 1.0f
+                    // Use <= so ORGANIC_SUSPICION (0.05f) == threshold triggers early-exit.
+                    result.suspicionScore <= EARLY_EXIT_SUSPICION_THRESHOLD && result.confidence == 1.0f
                 }
 
             // Phase 2: non-always-active rules, subject to suppression policy.
@@ -168,9 +170,12 @@ class DetectionOrchestrator(
      * Detects audio transitions that should resume full analysis:
      * - New speech-turn switch recorded in context.
      * - RMS energy spike (current chunk significantly louder than the recent window mean).
-     * - Silence boundary (near-zero RMS after non-silence, or non-silence after silence).
+     * - Silence boundary crossing (silent→non-silent or non-silent→silent).
      *
-     * Updates [previousSwitchCount] as a side effect.
+     * Only state *changes* on the silence axis trigger a transition event — sustained silence
+     * does not trigger repeatedly, allowing intermittent-sampling to apply during quiet segments.
+     *
+     * Updates [previousSwitchCount] and [previousChunkWasSilent] as side effects.
      */
     private fun detectTransition(currentRms: Float): Boolean {
         val currentSwitchCount = context.speechSwitchTimestamps.size
@@ -180,9 +185,12 @@ class DetectionOrchestrator(
         val energySpike = previousWindowMeanRms > 0f &&
                 currentRms > previousWindowMeanRms * RMS_SPIKE_FACTOR
 
-        val silenceBoundary = currentRms < SILENCE_RMS_THRESHOLD
+        // Trigger only on silence-state crossings, not on every silent chunk.
+        val currentlySilent = currentRms < SILENCE_RMS_THRESHOLD
+        val silenceBoundaryCrossing = currentlySilent != previousChunkWasSilent
+        previousChunkWasSilent = currentlySilent
 
-        return speechTurnDetected || energySpike || silenceBoundary
+        return speechTurnDetected || energySpike || silenceBoundaryCrossing
     }
 
     companion object {
@@ -200,5 +208,16 @@ class DetectionOrchestrator(
 
         // RMS below this value = silence boundary event.
         private const val SILENCE_RMS_THRESHOLD = 0.01f
+    }
+
+    /**
+     * Test-only helper: records a speech-switch timestamp in the orchestrator's internal context.
+     *
+     * Using `internal` access avoids brittle reflection. `ConversationContext.recordSpeechSwitch`
+     * is already `internal` so this wrapper is reachable from the `:voiceguard-engine` test
+     * source set without widening any public API.
+     */
+    internal fun recordSpeechSwitchForTest(epochMillis: Long) {
+        context.recordSpeechSwitch(epochMillis)
     }
 }
