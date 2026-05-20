@@ -1,0 +1,67 @@
+# ===========================
+# Kotlin / JVM
+# ===========================
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+
+# ===========================
+# Gradle
+# ===========================
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# ===========================
+# Android
+# ===========================
+*.apk
+*.aab
+*.ap_
+*.dex
+local.properties
+gen/
+out/
+captures/
+.externalNativeBuild/
+.cxx/
+
+
+# ===========================
+# TFLite / ML models (binaires)
+# ===========================
+*.tflite
+*.pb
+*.onnx
+
+# ===========================
+# Test outputs & reports
+# ===========================
+reports/
+test-results/
+coverage/
+*.exec
+
+# ===========================
+# OS
+# ===========================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===========================
+# Environment / secrets
+# ===========================
+*.env
+*.env.local
+secrets.properties
+keystore.properties
+*.jks
+*.keystore
+
