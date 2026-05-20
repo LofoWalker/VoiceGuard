@@ -2,8 +2,9 @@ package com.voiceguard.domain.model
 
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 
 class AudioChunkTest {
 
@@ -17,6 +18,20 @@ class AudioChunkTest {
     fun `custom sample rate is preserved`() {
         val chunk = AudioChunk(floatArrayOf(0.1f), sampleRate = 44_100)
         assertEquals(44_100, chunk.sampleRate)
+    }
+
+    @Test
+    fun `sample rate must be positive`() {
+        assertFailsWith<IllegalArgumentException> {
+            AudioChunk(floatArrayOf(0.1f), sampleRate = 0)
+        }
+    }
+
+    @Test
+    fun `pcm data must not be empty`() {
+        assertFailsWith<IllegalArgumentException> {
+            AudioChunk(floatArrayOf(), sampleRate = 16_000)
+        }
     }
 
     @Test

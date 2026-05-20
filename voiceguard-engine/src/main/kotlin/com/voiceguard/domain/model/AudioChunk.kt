@@ -12,6 +12,11 @@ data class AudioChunk(
     val pcmData: FloatArray,
     val sampleRate: Int = 16_000
 ) {
+    init {
+        require(sampleRate > 0) { "sampleRate must be > 0" }
+        require(pcmData.isNotEmpty()) { "pcmData must not be empty" }
+    }
+
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is AudioChunk) return false

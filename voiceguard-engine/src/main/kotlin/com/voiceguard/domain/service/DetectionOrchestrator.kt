@@ -51,8 +51,8 @@ class DetectionOrchestrator(
     /** Read-only live detection state; collectors receive an update after every processed chunk. */
     val state: StateFlow<DetectionUiState> = _state.asStateFlow()
 
-    // Cumulative elapsed time derived from actual chunk durations, not wall-clock time.
-    private var totalElapsedSeconds = 0.0f
+    // Cumulative processed-audio duration derived from chunk sizes, tracked in micros to avoid float drift.
+    private var totalElapsedMicros = 0L
 
     // ADR-02: one-way ratchet — globalConfidence never decreases across chunks.
     private var peakConfidence = 0.0f
@@ -72,7 +72,7 @@ class DetectionOrchestrator(
      */
     suspend fun processChunk(chunk: AudioChunk) = processingMutex.withLock {
         coroutineScope {
-            val chunkDuration = chunk.pcmData.size.toFloat() / chunk.sampleRate
+            val chunkDurationMicros = (chunk.pcmData.size.toLong() * 1_000_000L) / chunk.sampleRate
 
             // Rules receive the current context snapshot — no mutations happen during analysis.
             val ruleResults = rules
@@ -80,8 +80,8 @@ class DetectionOrchestrator(
                 .awaitAll()
 
             // Context mutations strictly after all rules complete (ADR-03).
-            totalElapsedSeconds += chunkDuration
-            context.updateCallDuration((totalElapsedSeconds * 1000).toLong())
+            totalElapsedMicros += chunkDurationMicros
+            context.updateCallDuration(totalElapsedMicros / 1_000L)
 
             val contributions = ruleResults.map { (rule, result) ->
                 RuleContribution(rule.weight, result.suspicionScore, result.confidence)
@@ -91,13 +91,13 @@ class DetectionOrchestrator(
             peakConfidence = maxOf(peakConfidence, rawConfidence)
 
             // Warm-up gate: first second suppressed to avoid unreliable early reads.
-            val globalConfidence = if (totalElapsedSeconds < 1.0f) 0.0f else peakConfidence
+            val globalConfidence = if (totalElapsedMicros < 1_000_000L) 0.0f else peakConfidence
 
             // ADR-04: NaN guard delegated to aggregator; also suppressed during warm-up.
             val aiProbability = if (globalConfidence < 0.05f) 0.0f
             else aggregator.computeAiProbability(contributions)
 
-            _state.value = DetectionUiState(globalConfidence, aiProbability, totalElapsedSeconds)
+            _state.value = DetectionUiState(globalConfidence, aiProbability, totalElapsedMicros / 1_000_000f)
         }
     }
 }

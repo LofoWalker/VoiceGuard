@@ -23,7 +23,7 @@ class ConversationContext {
         private set
 
     /** Appends a speech-switch event. Called exclusively by the orchestrator. */
-    fun recordSpeechSwitch(epochMillis: Long) {
+    internal fun recordSpeechSwitch(epochMillis: Long) {
         _speechSwitchTimestamps.add(epochMillis)
     }
 
@@ -31,7 +31,7 @@ class ConversationContext {
     fun lastSpeechSwitchAt(): Long? = _speechSwitchTimestamps.lastOrNull()
 
     /** Updates the running call duration. Called exclusively by the orchestrator after each chunk. */
-    fun updateCallDuration(durationMillis: Long) {
+    internal fun updateCallDuration(durationMillis: Long) {
         callDurationMillis = durationMillis
     }
 }
