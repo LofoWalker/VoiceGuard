@@ -33,7 +33,7 @@ class DetectionOrchestratorEarlyExitTest {
     // AC-1: when NoiseLinearityRule signals organic (low suspicion + full confidence),
     //        SpectralArtifactsRule must NOT be invoked for that chunk.
     @Test
-    fun `SpectralArtifactsRule_is_skipped_when_NoiseLinearityRule_triggers_early_exit`() = runTest(dispatcher) {
+    fun spectralArtifactsRule_is_skipped_when_NoiseLinearityRule_triggers_early_exit() = runTest(dispatcher) {
         val spectralClassifier = FakeSpectralClassifier(defaultScore = 0.9f)
         var spectralInvocations = 0
         val countingSpectralRule = object : AudioDetectionRule {
