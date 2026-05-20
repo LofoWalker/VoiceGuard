@@ -13,14 +13,24 @@ import com.voiceguard.domain.model.RuleResult
  *
  * @property name   Human-readable identifier used in logging and metrics.
  * @property weight Contribution factor in the weighted scoring formula, in [0.0, 1.0].
+ * @property isAlwaysActive If true, the orchestrator never skips this rule — not subject to
+ *   early-exit or intermittent-sampling suppression.
+ * @property isEarlyExitTrigger If true, the orchestrator evaluates an early-exit condition on
+ *   this rule's result to potentially skip expensive analysis downstream.
+ * @property isHeavyAnalysis If true, the orchestrator may skip this rule during intermittent
+ *   sampling (stable monologue) or early-exit suppression.
+ * @property canSkipOnEarlyExit If true, this rule is specifically skipped when an early-exit
+ *   trigger fires (subset of [isHeavyAnalysis]).
  */
 interface AudioDetectionRule {
 
-    /** Human-readable identifier used in logging and metrics. */
     val name: String
-
-    /** Contribution factor in the weighted scoring formula, in [0.0, 1.0]. */
     val weight: Float
+
+    val isAlwaysActive: Boolean get() = false
+    val isEarlyExitTrigger: Boolean get() = false
+    val isHeavyAnalysis: Boolean get() = false
+    val canSkipOnEarlyExit: Boolean get() = false
 
     /**
      * Analyses a single 500 ms PCM chunk and returns a suspicion/confidence pair.
@@ -30,4 +40,3 @@ interface AudioDetectionRule {
      */
     suspend fun analyze(chunk: AudioChunk, context: ConversationContext): RuleResult
 }
-
