@@ -4,6 +4,7 @@ import com.voiceguard.domain.context.ConversationContext
 import com.voiceguard.domain.model.AudioChunk
 import com.voiceguard.domain.model.RuleResult
 import com.voiceguard.domain.port.AudioDetectionRule
+import com.voiceguard.domain.service.computeRms
 import kotlin.math.sqrt
 
 /**
@@ -28,7 +29,7 @@ class NoiseLinearityRule(
 ) : AudioDetectionRule {
 
     override val name = "NoiseLinearityRule"
-    override val weight = 0.25f
+    override val weight = 0.20f
 
     // This rule is the lightweight sentinel — it always runs, triggers early-exit evaluation,
     // and is never suppressed by intermittent sampling (ADR architecture §Detection Rules table).
@@ -49,11 +50,6 @@ class NoiseLinearityRule(
         }
 
         return RuleResult(suspicion, confidence)
-    }
-
-    private fun computeRms(samples: FloatArray): Float {
-        val sumSquares = samples.sumOf { it.toDouble() * it.toDouble() }
-        return sqrt(sumSquares / samples.size).toFloat()
     }
 
     private fun computeLoopSuspicion(samples: FloatArray): Float {

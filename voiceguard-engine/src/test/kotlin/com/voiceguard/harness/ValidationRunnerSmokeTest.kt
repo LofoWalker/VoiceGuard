@@ -9,7 +9,9 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 @DisplayName("ValidationRunner — Story 3.4: Gradle entry point smoke tests")
 class ValidationRunnerSmokeTest {
@@ -44,8 +46,9 @@ class ValidationRunnerSmokeTest {
         val summary = runner.runValidation()
 
         assertEquals(0, summary.totalFiles)
-        assertEquals(1.0f, summary.accuracy, "Empty result accuracy should default to 1.0")
-        assertEquals(0.0f, summary.falsePositiveRate)
+        assertFalse(summary.metricsAvailable, "No countable verdicts → metricsAvailable must be false")
+        assertTrue(summary.accuracy.isNaN(), "No countable verdicts → accuracy must be NaN, not a fake 1.0")
+        assertTrue(summary.falsePositiveRate.isNaN(), "No countable verdicts → FPR must be NaN")
         assertEquals(0L, summary.budgetViolationCount.toLong())
     }
 

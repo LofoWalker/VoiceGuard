@@ -49,18 +49,21 @@ class ScoreAggregator {
     }
 
     /**
-     * Computes a weighted average of confidences across all contributions.
+     * Computes a weighted average of confidences against all configured rules.
      *
-     * Used by the orchestrator as the raw input to the monotone confidence ratchet.
-     * Returns `0.0f` when total weight is zero.
+     * The denominator is [totalConfiguredWeight] — the sum of weights of ALL rules in the
+     * pipeline, not just the ones present in [contributions]. This means a rule that was
+     * skipped (early-exit or intermittent sampling) lowers the confidence rather than
+     * inflating it: an excluded R-01/R-02 still "costs" their share of the weight.
+     *
+     * Returns `0.0f` when [totalConfiguredWeight] is zero.
      */
-    fun computeRawConfidence(contributions: List<RuleContribution>): Float {
-        val totalWeight = contributions.sumOf { it.weight.toDouble() }
-        if (totalWeight == 0.0) return 0.0f
+    fun computeRawConfidence(contributions: List<RuleContribution>, totalConfiguredWeight: Float): Float {
+        if (totalConfiguredWeight == 0.0f) return 0.0f
 
         val result = (contributions.sumOf {
             (it.weight * it.confidence).toDouble()
-        } / totalWeight).toFloat()
+        } / totalConfiguredWeight).toFloat()
         return if (result.isNaN() || result.isInfinite()) 0.0f else result
     }
 }

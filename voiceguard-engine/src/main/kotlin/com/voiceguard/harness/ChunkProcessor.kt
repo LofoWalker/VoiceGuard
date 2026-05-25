@@ -2,6 +2,7 @@ package com.voiceguard.harness
 
 import com.voiceguard.domain.model.AudioChunk
 import com.voiceguard.domain.model.DetectionUiState
+import com.voiceguard.domain.model.RuleDiagnostic
 import com.voiceguard.domain.service.DetectionOrchestrator
 
 /**
@@ -16,6 +17,9 @@ interface ChunkProcessor {
 
     /** Returns the engine state after the last processed chunk. */
     fun currentState(): DetectionUiState
+
+    /** Returns the latest per-rule diagnostics. Empty if the processor does not expose them. */
+    fun ruleDiagnostics(): List<RuleDiagnostic> = emptyList()
 }
 
 /**
@@ -27,5 +31,6 @@ class DetectionOrchestratorAdapter(
 ) : ChunkProcessor {
     override suspend fun processChunk(chunk: AudioChunk) = orchestrator.processChunk(chunk)
     override fun currentState(): DetectionUiState = orchestrator.state.value
+    override fun ruleDiagnostics(): List<RuleDiagnostic> = orchestrator.ruleDiagnostics()
 }
 

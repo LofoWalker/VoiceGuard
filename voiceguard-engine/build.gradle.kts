@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "com.voiceguard"
-version = "1.0.0-SNAPSHOT"
+version = "0.3.0-SNAPSHOT"
 
 kotlin {
     jvmToolchain(21)

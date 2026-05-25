@@ -11,6 +11,7 @@ import java.io.FileOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.test.assertNotNull
 
 @DisplayName("ValidationRunner — Story 3.2: per-file verdicts and aggregate metrics")
 class ValidationRunnerMetricsTest {
@@ -92,10 +93,10 @@ class ValidationRunnerMetricsTest {
         createSyntheticWav(realDir, "human.wav")
         createSyntheticWav(fakeDir, "ai.wav")
 
-        // Both files return confidence below the 0.6 threshold → should not count
+        // Both files return confidence below the minConfidence gate → should not count
         val runner = ValidationRunner(
             datasetDir = tempDir,
-            processorFactory = { FakeChunkProcessor(DetectionUiState(0.4f, 0.8f, 0.5f)) }
+            processorFactory = { FakeChunkProcessor(DetectionUiState(0.2f, 0.8f, 0.5f)) }
         )
 
         val summary = runner.runValidation()
@@ -156,6 +157,81 @@ class ValidationRunnerMetricsTest {
         val summary = runner.runValidation()
 
         assertEquals(GroundTruthLabel.AI, summary.verdicts.first().groundTruth)
+    }
+
+    // ── A2 : recall + confusion matrix ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("should compute 100% recall when all AI files are correctly classified")
+    fun should_compute_100_percent_recall_when_all_ai_detected(@TempDir tempDir: File) = runTest {
+        val fakeDir = File(tempDir, "fake").apply { mkdirs() }
+        repeat(3) { i -> createSyntheticWav(fakeDir, "ai_$i.wav") }
+
+        val runner = ValidationRunner(
+            datasetDir = tempDir,
+            processorFactory = { FakeChunkProcessor(DetectionUiState(0.8f, 0.9f, 1.0f)) } // AI verdict
+        )
+        val summary = runner.runValidation()
+
+        assertTrue(summary.metricsAvailable)
+        assertEquals(3, summary.totalAiFiles)
+        assertEquals(3, summary.truePositives)
+        assertEquals(0, summary.falseNegatives)
+        assertEquals(1.0f, summary.recall, absoluteTolerance = 0.001f, "All AI detected → recall 100%")
+    }
+
+    @Test
+    @DisplayName("should compute 0% recall when all AI files are missed")
+    fun should_compute_0_percent_recall_when_no_ai_detected(@TempDir tempDir: File) = runTest {
+        val fakeDir = File(tempDir, "fake").apply { mkdirs() }
+        repeat(3) { i -> createSyntheticWav(fakeDir, "ai_$i.wav") }
+
+        val runner = ValidationRunner(
+            datasetDir = tempDir,
+            processorFactory = { FakeChunkProcessor(DetectionUiState(0.8f, 0.1f, 1.0f)) } // HUMAN verdict
+        )
+        val summary = runner.runValidation()
+
+        assertTrue(summary.metricsAvailable)
+        assertEquals(0, summary.truePositives)
+        assertEquals(3, summary.falseNegatives)
+        assertEquals(0.0f, summary.recall, absoluteTolerance = 0.001f, "No AI detected → recall 0%")
+    }
+
+    @Test
+    @DisplayName("recall is NaN when there are no AI files in the countable set")
+    fun recall_is_NaN_when_no_ai_files(@TempDir tempDir: File) = runTest {
+        val realDir = File(tempDir, "real").apply { mkdirs() }
+        createSyntheticWav(realDir, "human.wav")
+
+        val runner = ValidationRunner(
+            datasetDir = tempDir,
+            processorFactory = { FakeChunkProcessor(DetectionUiState(0.8f, 0.1f, 1.0f)) }
+        )
+        val summary = runner.runValidation()
+
+        assertTrue(summary.metricsAvailable)
+        assertTrue(summary.recall.isNaN(), "No AI files → recall must be NaN, not a fake value")
+    }
+
+    // ── A3 : pas de faux-vert metricsAvailable ──────────────────────────────────
+
+    @Test
+    @DisplayName("metricsAvailable is false when all verdicts are low-confidence")
+    fun metrics_unavailable_when_all_verdicts_low_confidence(@TempDir tempDir: File) = runTest {
+        val realDir = File(tempDir, "real").apply { mkdirs() }
+        createSyntheticWav(realDir, "human.wav")
+
+        val runner = ValidationRunner(
+            datasetDir = tempDir,
+            processorFactory = { FakeChunkProcessor(DetectionUiState(0.2f, 0.9f, 0.5f)) } // below minConfidence
+        )
+        val summary = runner.runValidation()
+
+        assertFalse(summary.metricsAvailable, "Low-confidence verdicts must yield metricsAvailable=false")
+        assertTrue(summary.accuracy.isNaN(), "accuracy must be NaN — not a misleading 1.0")
+        assertTrue(summary.falsePositiveRate.isNaN(), "FPR must be NaN")
+        assertTrue(summary.recall.isNaN(), "recall must be NaN")
     }
 
     private fun createSyntheticWav(dir: File, name: String, sampleCount: Int = 16_000) {

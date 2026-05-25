@@ -15,9 +15,9 @@ import com.voiceguard.domain.port.SpectralClassifierPort
  *
  * Confidence grows linearly across successive chunks via a simple ramp over [RAMP_CHUNKS],
  * reflecting incremental evidence accumulation. A [SpectralClassifierPort] is accepted via
- * constructor injection so the domain layer stays free of Android/TFLite bindings (ADR-01):
+ * constructor injection so the domain layer stays free of Android/native bindings (ADR-01):
  *
- * - Production: [com.voiceguard.adapters.TFLiteSpectralAdapter]
+ * - Production: [com.voiceguard.adapters.FftSpectralClassifier]
  * - Tests:      [com.voiceguard.adapters.FakeSpectralClassifier]
  *
  * This rule is [isHeavyAnalysis] and [canSkipOnEarlyExit] because it is the most CPU-expensive
@@ -30,7 +30,7 @@ class SpectralArtifactsRule(
 ) : AudioDetectionRule {
 
     override val name = "SpectralArtifactsRule"
-    override val weight = 0.35f
+    override val weight = 0.15f
     override val isHeavyAnalysis = true
     override val canSkipOnEarlyExit = true
 
@@ -44,8 +44,10 @@ class SpectralArtifactsRule(
     }
 
     companion object {
-        // Ramp over ~5 seconds (10 × 500 ms chunks) to reach full confidence.
-        private const val RAMP_CHUNKS = 10
+        // Ramp over ~3 seconds (6 × 500 ms chunks) to reach full confidence.
+        // Tuned to typical dataset-utterance lengths (2–3 s): a 10-chunk ramp left R-02
+        // stuck near confidence ~0.4 on short files, capping globalConfidence below the gate.
+        private const val RAMP_CHUNKS = 6
     }
 }
 

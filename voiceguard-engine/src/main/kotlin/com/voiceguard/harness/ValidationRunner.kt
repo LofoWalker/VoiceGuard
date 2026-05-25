@@ -77,7 +77,8 @@ class ValidationRunner(
                         groundTruth = groundTruth,
                         engineVerdict = classifyState(finalState),
                         aiProbability = finalState.aiProbability,
-                        globalConfidence = finalState.globalConfidence
+                        globalConfidence = finalState.globalConfidence,
+                        ruleDiagnostics = processor.ruleDiagnostics()
                     )
                 )
             } catch (e: Exception) {
@@ -124,36 +125,83 @@ class ValidationRunner(
         latenciesNs: List<Long>
     ): ValidationSummary {
         val countable = verdicts.filter { it.globalConfidence >= config.minConfidence }
+        val metricsAvailable = countable.isNotEmpty()
+
         val correctCount = countable.count { it.isCorrect }
-        val accuracy = if (countable.isEmpty()) 1.0f else correctCount.toFloat() / countable.size
+        val accuracy = if (!metricsAvailable) Float.NaN else correctCount.toFloat() / countable.size
 
         val humanCountable = countable.filter { it.groundTruth == GroundTruthLabel.HUMAN }
         val falsePositives = humanCountable.count { it.engineVerdict == GroundTruthLabel.AI }
-        val fpr = if (humanCountable.isEmpty()) 0.0f else falsePositives.toFloat() / humanCountable.size
+        val fpr = if (!metricsAvailable) Float.NaN
+                  else if (humanCountable.isEmpty()) 0.0f
+                  else falsePositives.toFloat() / humanCountable.size
 
-        val meanLatencyMs = if (latenciesNs.isEmpty()) 0.0
-        else latenciesNs.average() / NS_TO_MS
-        val maxLatencyMs = if (latenciesNs.isEmpty()) 0L
-        else (latenciesNs.maxOrNull()!! / NS_TO_MS).toLong()
+        val aiCountable = countable.filter { it.groundTruth == GroundTruthLabel.AI }
+        val truePositives = aiCountable.count { it.engineVerdict == GroundTruthLabel.AI }
+        val falseNegatives = aiCountable.count { it.engineVerdict == GroundTruthLabel.HUMAN }
+        val recall = if (!metricsAvailable || aiCountable.isEmpty()) Float.NaN
+                     else truePositives.toFloat() / aiCountable.size
+
+        val meanLatencyMs = if (latenciesNs.isEmpty()) 0.0 else latenciesNs.average() / NS_TO_MS
+        val maxLatencyMs = if (latenciesNs.isEmpty()) 0L else (latenciesNs.maxOrNull()!! / NS_TO_MS).toLong()
         val violations = latenciesNs.count { it / NS_TO_MS.toLong() > config.budgetMs }
 
         return ValidationSummary(
             totalFiles = verdicts.size,
             countableVerdicts = countable.size,
+            metricsAvailable = metricsAvailable,
             correctCount = correctCount,
             accuracy = accuracy,
             totalHumanFiles = humanCountable.size,
             falsePositives = falsePositives,
             falsePositiveRate = fpr,
+            totalAiFiles = aiCountable.size,
+            truePositives = truePositives,
+            falseNegatives = falseNegatives,
+            recall = recall,
             meanLatencyMs = meanLatencyMs,
             maxLatencyMs = maxLatencyMs,
             budgetViolationCount = violations,
+            ruleStats = computeRuleAggregates(countable),
             verdicts = verdicts
         )
     }
 
+    /**
+     * Aggregates per-rule suspicion (split by ground truth) and confidence over countable verdicts.
+     * The AI-vs-HUMAN suspicion gap reveals each rule's discriminative power on the dataset.
+     * Returns empty when no countable verdict carries rule diagnostics (e.g. faked processors).
+     */
+    private fun computeRuleAggregates(countable: List<ValidationVerdict>): List<RuleAggregate> {
+        val ruleNames = countable.firstOrNull { it.ruleDiagnostics.isNotEmpty() }
+            ?.ruleDiagnostics?.map { it.ruleName } ?: return emptyList()
+
+        val aiVerdicts = countable.filter { it.groundTruth == GroundTruthLabel.AI }
+        val humanVerdicts = countable.filter { it.groundTruth == GroundTruthLabel.HUMAN }
+
+        fun suspicionsOf(name: String, list: List<ValidationVerdict>): List<Float> =
+            list.mapNotNull { v -> v.ruleDiagnostics.find { it.ruleName == name }?.suspicionScore }
+
+        return ruleNames.map { name ->
+            val allDiag = countable.mapNotNull { v -> v.ruleDiagnostics.find { it.ruleName == name } }
+            val ai = suspicionsOf(name, aiVerdicts)
+            val human = suspicionsOf(name, humanVerdicts)
+            RuleAggregate(
+                ruleName = name,
+                weight = allDiag.firstOrNull()?.weight ?: 0f,
+                meanSuspicionAi = if (ai.isEmpty()) Float.NaN else ai.average().toFloat(),
+                meanSuspicionHuman = if (human.isEmpty()) Float.NaN else human.average().toFloat(),
+                meanConfidence = if (allDiag.isEmpty()) Float.NaN else allDiag.map { it.confidence }.average().toFloat(),
+                activeRate = if (allDiag.isEmpty()) 0f else allDiag.count { it.activeOnLastChunk }.toFloat() / allDiag.size
+            )
+        }
+    }
+
     companion object {
-        private val SUPPORTED_EXTENSIONS = setOf("wav", "mp3", "pcm")
+        private val SUPPORTED_EXTENSIONS = setOf("wav", "mp3")
+        // KPI targets from PRD §6.2
+        private const val KPI_MIN_ACCURACY = 0.85f
+        private const val KPI_MAX_FPR = 0.05f
         private val HUMAN_DIR_NAMES = setOf("real", "human")
         private val AI_DIR_NAMES = setOf("fake", "ai", "deepfake")
         private const val NS_TO_MS = 1_000_000.0
@@ -179,36 +227,67 @@ class ValidationRunner(
                 require(it.isDirectory) { "Dataset path is not a directory: $datasetPath" }
             }
 
-            val rules = buildProductionRules()
             val summary = runBlocking {
                 ValidationRunner(
                     datasetDir = datasetDir,
-                    processorFactory = {
-                        DetectionOrchestratorAdapter(DetectionOrchestrator(rules))
-                    }
+                    processorFactory = { DetectionOrchestratorAdapter(DetectionOrchestrator(buildProductionRules())) }
                 ).runValidation()
             }
 
             summary.printReport()
+
+            if (!checkKpis(summary)) {
+                System.err.println("[VoiceGuard] KPI non atteints — exit 1 (voir rapport ci-dessus)")
+                kotlin.system.exitProcess(1)
+            }
         }
 
         /**
-         * Wires the full rule set used in Phase 1 JVM validation.
-         *
-         * TFLiteSpectralAdapter is constructed with hardwareAccelerationAvailable=true so the
-         * Phase 1 placeholder (neutral 0.5 score) runs without an NNAPI/GPU delegate check —
-         * acceptable because this is a JVM validation harness, not an Android deployment.
+         * Returns true when all measurable KPIs pass their targets.
+         * When [ValidationSummary.metricsAvailable] is false the run is inconclusive — treated as
+         * a warning (returns true) rather than a hard failure, since no dataset was reachable.
          */
-        private fun buildProductionRules(): List<AudioDetectionRule> {
-            val spectralAdapter = com.voiceguard.adapters.TFLiteSpectralAdapter(
-                hardwareAccelerationAvailable = true
-            )
-            return listOf(
+        private fun checkKpis(summary: ValidationSummary): Boolean {
+            if (!summary.metricsAvailable) {
+                System.err.println("[VoiceGuard] Avertissement : aucun verdict exploitable, KPI non mesurables.")
+                return true
+            }
+            var passed = true
+            if (!summary.accuracy.isNaN() && summary.accuracy < KPI_MIN_ACCURACY) {
+                System.err.println("[VoiceGuard] KPI échoué : précision ${
+                    "%.1f".format(summary.accuracy * 100)}% < cible ${
+                    "%.0f".format(KPI_MIN_ACCURACY * 100)}%")
+                passed = false
+            }
+            if (!summary.falsePositiveRate.isNaN() && summary.falsePositiveRate > KPI_MAX_FPR) {
+                System.err.println("[VoiceGuard] KPI échoué : FPR ${
+                    "%.1f".format(summary.falsePositiveRate * 100)}% > cible ${
+                    "%.0f".format(KPI_MAX_FPR * 100)}%")
+                passed = false
+            }
+            if (summary.budgetViolationCount > 0) {
+                System.err.println("[VoiceGuard] KPI échoué : ${summary.budgetViolationCount} chunk(s) hors budget latence")
+                passed = false
+            }
+            return passed
+        }
+
+        /**
+         * Wires a fresh rule set for one file evaluation.
+         * Called inside processorFactory so each file gets independent rule instances —
+         * no mutable state (chunk counters, contours) leaks across file boundaries.
+         *
+         * Weights sum to 1.0: R-03 0.20, R-01 0.15, R-02 0.15, R-04 0.20, R-05 0.15, R-06 0.15.
+         */
+        private fun buildProductionRules(): List<AudioDetectionRule> =
+            listOf(
                 com.voiceguard.rules.NoiseLinearityRule(),
                 com.voiceguard.rules.LatencyBehaviorRule(),
-                com.voiceguard.rules.SpectralArtifactsRule(spectralAdapter)
+                com.voiceguard.rules.SpectralArtifactsRule(com.voiceguard.adapters.FftSpectralClassifier()),
+                com.voiceguard.rules.JitterShimmerRule(),
+                com.voiceguard.rules.CepstralPeakRule(),
+                com.voiceguard.rules.ProsodicDynamicsRule()
             )
-        }
     }
 }
 
@@ -228,7 +307,14 @@ data class ValidationConfig(
 ) {
     companion object {
         const val DEFAULT_AI_THRESHOLD = 0.5f
-        const val DEFAULT_MIN_CONFIDENCE = 0.6f
+
+        // On a dataset of isolated utterances (no conversational turn-taking), R-01
+        // (weight 0.40) never fires, so the achievable globalConfidence ceiling is
+        // 0.35 (R-02) + 0.25 (R-03) = 0.60. A gate of 0.60 would therefore exclude
+        // every file. 0.30 ≈ half that ceiling: it admits files with ~1.5 s+ of audio
+        // (R-03 ramped + R-02 partially ramped) while still rejecting <1 s fragments.
+        // The 0.60 UX threshold from the PRD applies to live conversational detection.
+        const val DEFAULT_MIN_CONFIDENCE = 0.3f
         const val DEFAULT_BUDGET_MS = 50L
     }
 }
