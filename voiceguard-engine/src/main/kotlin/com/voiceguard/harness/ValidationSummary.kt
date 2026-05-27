@@ -155,7 +155,7 @@ data class ValidationSummary(
         if (misclassified.isEmpty()) {
             println("Aucun fichier mal classé.")
         } else if (!verbose) {
-            println("Fichiers mal classés : ${misclassified.size}  (relancer avec -Pverbose pour le détail)")
+            println("Fichiers mal classés : ${misclassified.size}  (relancer avec -v ou ./gradlew … -Pverbose pour le détail)")
         } else {
             println("FICHIERS MAL CLASSÉS (${misclassified.size})")
             println("  Détail par règle : <initiales> s=suspicion c=confiance (* = inactive au dernier chunk)")

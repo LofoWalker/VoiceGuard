@@ -261,7 +261,12 @@ class ValidationRunner(
          */
         @JvmStatic
         fun main(args: Array<String>) {
-            val datasetPath = args.firstOrNull()
+            // Separate flags from positional arguments so that "-v" / "--verbose" are never
+            // mistaken for the dataset path.
+            val flags = args.filter { it == "-v" || it == "--verbose" }
+            val positional = args.filterNot { it == "-v" || it == "--verbose" }
+
+            val datasetPath = positional.firstOrNull()
                 ?: System.getProperty("datasetPath")
                 ?: error(
                     "Dataset path not provided. " +
@@ -286,8 +291,14 @@ class ValidationRunner(
                 ).runValidation()
             }
 
-            // -Pverbose (Gradle property forwarded as JVM system property) ou "-v" comme argument.
-            val verbose = System.getProperty("verbose") != null || args.contains("-v")
+            // -Pverbose (Gradle property forwarded as JVM system property) ou "-v" / "--verbose"
+            // comme argument (détecté via la liste de flags extraite ci-dessus).
+            // La valeur de la propriété est parsée en booléen : seules "" (bare -Pverbose) et
+            // "true" (insensible à la casse) activent le mode verbose, évitant qu'un
+            // -Dverbose=false explicite soit interprété comme une activation.
+            val verbose = System.getProperty("verbose")
+                ?.let { it.isEmpty() || it.equals("true", ignoreCase = true) } == true
+                || flags.isNotEmpty()
             summary.printReport(verbose)
 
             if (!checkKpis(summary)) {

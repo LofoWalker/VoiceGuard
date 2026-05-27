@@ -63,8 +63,11 @@ tasks.register<JavaExec>("validateEngine") {
     // If not provided, ValidationRunner.main() will print a clear error and exit.
 
     // Forward -Pverbose as a JVM system property so ValidationRunner can read it.
-    if (findProperty("verbose") != null) {
-        systemProperty("verbose", "true")
+    // Bare -Pverbose yields an empty string; map that to "true". Explicit -Pverbose=false
+    // propagates "false" so the runner can correctly disable verbose mode.
+    val verboseProp = findProperty("verbose")
+    if (verboseProp != null) {
+        systemProperty("verbose", verboseProp.toString().ifEmpty { "true" })
     }
 
     dependsOn(tasks.named("classes"))
