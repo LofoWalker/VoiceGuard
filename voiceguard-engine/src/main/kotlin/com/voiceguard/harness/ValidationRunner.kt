@@ -59,7 +59,7 @@ class ValidationRunner(
         for ((file, groundTruth) in audioFiles) {
             try {
                 val processor = processorFactory()
-                val source = DatasetAudioSource(file)
+                val source = DatasetAudioSource(file, config.targetSampleRate)
                 val fileLatenciesNs = mutableListOf<Long>()
 
                 source.audioStream().onEach { chunk ->
@@ -168,8 +168,12 @@ class ValidationRunner(
     }
 
     /**
-     * Aggregates per-rule suspicion (split by ground truth) and confidence over countable verdicts.
-     * The AI-vs-HUMAN suspicion gap reveals each rule's discriminative power on the dataset.
+     * Aggregates per-rule separability over countable verdicts: mean/std suspicion split by
+     * ground truth, ROC AUC, Cohen's d, and the best standalone cutoff — the inputs needed to
+     * decide which rules to recalibrate, flip, or replace.
+     *
+     * Suspicion stats use only files where the rule actually voted (confidence > 0); abstentions
+     * are excluded so they do not masquerade as "suspicion 0 = human" (see [RuleAggregate]).
      * Returns empty when no countable verdict carries rule diagnostics (e.g. faked processors).
      */
     private fun computeRuleAggregates(countable: List<ValidationVerdict>): List<RuleAggregate> {
@@ -179,18 +183,29 @@ class ValidationRunner(
         val aiVerdicts = countable.filter { it.groundTruth == GroundTruthLabel.AI }
         val humanVerdicts = countable.filter { it.groundTruth == GroundTruthLabel.HUMAN }
 
-        fun suspicionsOf(name: String, list: List<ValidationVerdict>): List<Float> =
-            list.mapNotNull { v -> v.ruleDiagnostics.find { it.ruleName == name }?.suspicionScore }
+        fun votedSuspicions(name: String, list: List<ValidationVerdict>): List<Float> =
+            list.mapNotNull { v ->
+                v.ruleDiagnostics.find { it.ruleName == name && it.confidence > 0f }?.suspicionScore
+            }
 
         return ruleNames.map { name ->
             val allDiag = countable.mapNotNull { v -> v.ruleDiagnostics.find { it.ruleName == name } }
-            val ai = suspicionsOf(name, aiVerdicts)
-            val human = suspicionsOf(name, humanVerdicts)
+            val ai = votedSuspicions(name, aiVerdicts)
+            val human = votedSuspicions(name, humanVerdicts)
+            val (threshold, accuracy) = RuleDiscrimination.bestThreshold(ai, human)
             RuleAggregate(
                 ruleName = name,
                 weight = allDiag.firstOrNull()?.weight ?: 0f,
-                meanSuspicionAi = if (ai.isEmpty()) Float.NaN else ai.average().toFloat(),
-                meanSuspicionHuman = if (human.isEmpty()) Float.NaN else human.average().toFloat(),
+                nAi = ai.size,
+                nHuman = human.size,
+                meanSuspicionAi = RuleDiscrimination.mean(ai),
+                meanSuspicionHuman = RuleDiscrimination.mean(human),
+                stdAi = RuleDiscrimination.sampleStd(ai),
+                stdHuman = RuleDiscrimination.sampleStd(human),
+                cohensD = RuleDiscrimination.cohensD(ai, human),
+                auc = RuleDiscrimination.auc(ai, human),
+                suggestedThreshold = threshold,
+                accuracyAtThreshold = accuracy,
                 meanConfidence = if (allDiag.isEmpty()) Float.NaN else allDiag.map { it.confidence }.average().toFloat(),
                 activeRate = if (allDiag.isEmpty()) 0f else allDiag.count { it.activeOnLastChunk }.toFloat() / allDiag.size
             )
@@ -205,6 +220,10 @@ class ValidationRunner(
         private val HUMAN_DIR_NAMES = setOf("real", "human")
         private val AI_DIR_NAMES = setOf("fake", "ai", "deepfake")
         private const val NS_TO_MS = 1_000_000.0
+
+        // Common rate all files are resampled to during validation, to remove the dataset's
+        // sample-rate/label confound (real 16 kHz vs fake 24 kHz).
+        private const val NORMALISED_SAMPLE_RATE = 16_000
 
         /**
          * Entry point for Gradle-triggered validation.
@@ -230,7 +249,10 @@ class ValidationRunner(
             val summary = runBlocking {
                 ValidationRunner(
                     datasetDir = datasetDir,
-                    processorFactory = { DetectionOrchestratorAdapter(DetectionOrchestrator(buildProductionRules())) }
+                    processorFactory = { DetectionOrchestratorAdapter(DetectionOrchestrator(buildProductionRules())) },
+                    // Step 1: resample every file to a common rate so bandwidth-based rules judge
+                    // synthesis artifacts, not the dataset's real-16k / fake-24k sample-rate confound.
+                    config = ValidationConfig(targetSampleRate = NORMALISED_SAMPLE_RATE)
                 ).runValidation()
             }
 
@@ -277,13 +299,17 @@ class ValidationRunner(
          * Called inside processorFactory so each file gets independent rule instances —
          * no mutable state (chunk counters, contours) leaks across file boundaries.
          *
-         * Weights sum to 1.0: R-03 0.20, R-01 0.15, R-02 0.15, R-04 0.20, R-05 0.15, R-06 0.15.
+         * FoR calibration (directions chosen on the validation split):
+         * - R-02 inverted: FoR fakes are bright, not band-limited (validation AUC 0.31 → ~0.69).
+         * - R-06 left default: flipping it improved ranking (AUC) but tripled FPR on the aggregate
+         *   (both classes scored high), so it is a net loss — kept in its original direction.
+         * - R-01 dropped: 0 votes on isolated utterances (no turn-taking) — pure weight dilution.
+         * Remaining weights renormalise automatically in [ScoreAggregator] (no manual rebalancing).
          */
         private fun buildProductionRules(): List<AudioDetectionRule> =
             listOf(
                 com.voiceguard.rules.NoiseLinearityRule(),
-                com.voiceguard.rules.LatencyBehaviorRule(),
-                com.voiceguard.rules.SpectralArtifactsRule(com.voiceguard.adapters.FftSpectralClassifier()),
+                com.voiceguard.rules.SpectralArtifactsRule(com.voiceguard.adapters.FftSpectralClassifier(), invertScore = true),
                 com.voiceguard.rules.JitterShimmerRule(),
                 com.voiceguard.rules.CepstralPeakRule(),
                 com.voiceguard.rules.ProsodicDynamicsRule()
@@ -299,11 +325,14 @@ class ValidationRunner(
  * @param minConfidence Minimum [com.voiceguard.domain.model.DetectionUiState.globalConfidence]
  *                     for a verdict to be included in accuracy / FPR computation.
  * @param budgetMs     Maximum allowed per-chunk processing time in milliseconds (PRD NFR2).
+ * @param targetSampleRate When non-null, files are resampled to this rate before analysis to
+ *                     remove a sample-rate/label confound. Null preserves each file's native rate.
  */
 data class ValidationConfig(
     val aiThreshold: Float = DEFAULT_AI_THRESHOLD,
     val minConfidence: Float = DEFAULT_MIN_CONFIDENCE,
-    val budgetMs: Long = DEFAULT_BUDGET_MS
+    val budgetMs: Long = DEFAULT_BUDGET_MS,
+    val targetSampleRate: Int? = null
 ) {
     companion object {
         const val DEFAULT_AI_THRESHOLD = 0.5f

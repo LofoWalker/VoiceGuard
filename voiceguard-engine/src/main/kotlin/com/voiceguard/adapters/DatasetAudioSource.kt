@@ -26,8 +26,15 @@ import javax.sound.sampled.AudioSystem
  * deterministic evaluation runs (AC3 Story 3.1).
  *
  * @param audioFile Source audio file — must exist and be readable.
+ * @param targetSampleRate When non-null, every file is resampled to this rate during decode.
+ *   Used to neutralise a dataset where the sample rate correlates with the label (e.g. real 16 kHz
+ *   vs fake 24 kHz), which would otherwise let bandwidth-based rules detect the rate, not synthesis.
+ *   Null (default) preserves the file's native rate.
  */
-class DatasetAudioSource(private val audioFile: File) : AudioSourcePort {
+class DatasetAudioSource(
+    private val audioFile: File,
+    private val targetSampleRate: Int? = null
+) : AudioSourcePort {
 
     init {
         require(audioFile.exists()) { "Audio file not found: ${audioFile.absolutePath}" }
@@ -56,35 +63,54 @@ class DatasetAudioSource(private val audioFile: File) : AudioSourcePort {
     /**
      * Decodes the audio file to signed 16-bit little-endian PCM mono using [AudioSystem].
      *
-     * Two-step conversion when necessary:
+     * Conversion steps:
      * 1. Source format → signed 16-bit PCM (preserving channels and sample rate).
-     * 2. Multi-channel → mono by extracting the left channel from each interleaved frame.
+     * 2. Optional → resample to [targetSampleRate] when it differs from the source rate.
+     * 3. Multi-channel → mono by extracting the left channel from each interleaved frame.
+     *
+     * Returns the decoded mono bytes paired with the rate they are actually at (the target rate
+     * when resampling occurred, otherwise the source rate).
      */
     private fun decodeToPcmMono(file: File): Pair<ByteArray, Int> {
         AudioSystem.getAudioInputStream(file).use { sourceStream ->
             val srcFormat = sourceStream.format
-            val sampleRate = srcFormat.sampleRate.toInt()
+            val srcRate = srcFormat.sampleRate.toInt()
+            val outRate = targetSampleRate ?: srcRate
 
-            val pcmFormat = AudioFormat(
-                AudioFormat.Encoding.PCM_SIGNED,
-                srcFormat.sampleRate,
-                BITS_PER_SAMPLE,
-                srcFormat.channels,
-                srcFormat.channels * BYTES_PER_SAMPLE,
-                srcFormat.sampleRate,
-                false  // little-endian — matches ByteBuffer default in toNormalizedFloats()
-            )
+            val pcmFormat = pcmFormatAt(srcFormat.sampleRate, srcFormat.channels)
+            val pcmStream = AudioSystem.getAudioInputStream(pcmFormat, sourceStream)
 
-            AudioSystem.getAudioInputStream(pcmFormat, sourceStream).use { pcmStream ->
-                val rawBytes = pcmStream.readBytes()
+            val finalStream = if (outRate != srcRate) {
+                val rateFormat = pcmFormatAt(outRate.toFloat(), srcFormat.channels)
+                require(AudioSystem.isConversionSupported(rateFormat, pcmFormat)) {
+                    "Resampling $srcRate Hz → $outRate Hz not supported for ${file.name}"
+                }
+                AudioSystem.getAudioInputStream(rateFormat, pcmStream)
+            } else {
+                pcmStream
+            }
+
+            finalStream.use { stream ->
+                val rawBytes = stream.readBytes()
                 val monoBytes = if (srcFormat.channels > 1)
                     extractLeftChannel(rawBytes, srcFormat.channels)
                 else
                     rawBytes
-                return Pair(monoBytes, sampleRate)
+                return Pair(monoBytes, outRate)
             }
         }
     }
+
+    /** Signed 16-bit little-endian PCM format at [rate] (little-endian matches [toNormalizedFloats]). */
+    private fun pcmFormatAt(rate: Float, channels: Int): AudioFormat = AudioFormat(
+        AudioFormat.Encoding.PCM_SIGNED,
+        rate,
+        BITS_PER_SAMPLE,
+        channels,
+        channels * BYTES_PER_SAMPLE,
+        rate,
+        false
+    )
 
     /**
      * Extracts the left (first) channel from interleaved multi-channel 16-bit PCM bytes.

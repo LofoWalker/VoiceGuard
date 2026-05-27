@@ -21,7 +21,9 @@ import kotlin.math.sqrt
  * Not [isHeavyAnalysis]: it must run on every chunk so the variability estimate samples the whole
  * utterance rather than only its dynamic segments.
  */
-class ProsodicDynamicsRule : AudioDetectionRule {
+class ProsodicDynamicsRule(
+    private val invertDirection: Boolean = false
+) : AudioDetectionRule {
 
     override val name = "ProsodicDynamicsRule"
     override val weight = 0.15f
@@ -50,8 +52,11 @@ class ProsodicDynamicsRule : AudioDetectionRule {
         if (covs.isEmpty()) return RuleResult(0.0f, 0.0f)
 
         val variability = covs.average().toFloat()
-        // Low variability (flat prosody) → high suspicion; lively human prosody → 0.
-        val suspicion = (1.0f - variability / VARIABILITY_REF).coerceIn(0.0f, 1.0f)
+        // Default premise: low variability (flat prosody) → high suspicion; lively human → 0.
+        // [invertDirection] reverses it for corpora where the synthetic voices are *more* dynamic
+        // than the (flat, read) human samples — calibrated on the FoR validation split.
+        val normalized = (variability / VARIABILITY_REF).coerceIn(0.0f, 1.0f)
+        val suspicion = if (invertDirection) normalized else 1.0f - normalized
         val confidence = (chunksSeen.toFloat() / RAMP_CHUNKS).coerceAtMost(1.0f)
 
         return RuleResult(suspicion, confidence)

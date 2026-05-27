@@ -3,18 +3,39 @@ package com.voiceguard.harness
 /**
  * Per-rule performance aggregated over the countable verdicts of a run.
  *
- * @param ruleName           Rule identifier.
- * @param weight             Rule weight in the scoring formula.
- * @param meanSuspicionAi    Mean suspicion this rule reported on AI files (NaN if none).
- * @param meanSuspicionHuman Mean suspicion this rule reported on HUMAN files (NaN if none).
- * @param meanConfidence     Mean confidence this rule reported across all countable files.
- * @param activeRate         Fraction of files where the rule ran on the final chunk (not suppressed).
+ * Suspicion statistics ([meanSuspicionAi], [stdAi], [auc], …) are computed only over files where
+ * the rule **actually voted** (confidence > 0). A rule that abstained on a file (e.g. R-01 on an
+ * isolated utterance with no turn-switching) is excluded there rather than scored as "suspicion 0",
+ * so the separability metrics are not diluted by abstentions.
+ *
+ * @param ruleName             Rule identifier.
+ * @param weight               Rule weight in the scoring formula.
+ * @param nAi                  AI files where the rule voted (sample size behind the AI stats).
+ * @param nHuman               HUMAN files where the rule voted.
+ * @param meanSuspicionAi      Mean suspicion on AI files (NaN if the rule never voted on one).
+ * @param meanSuspicionHuman   Mean suspicion on HUMAN files (NaN if none).
+ * @param stdAi                Sample standard deviation of suspicion on AI files (NaN if n < 2).
+ * @param stdHuman             Sample standard deviation of suspicion on HUMAN files (NaN if n < 2).
+ * @param cohensD              Effect size (mean gap normalised by pooled std); sign = direction.
+ * @param auc                  ROC AUC: 0.5 = useless, 1.0 = perfect, < 0.5 = inverted direction.
+ * @param suggestedThreshold   Suspicion cutoff maximising this rule's standalone accuracy.
+ * @param accuracyAtThreshold  Standalone accuracy of the rule at [suggestedThreshold].
+ * @param meanConfidence       Mean confidence this rule reported across all countable files.
+ * @param activeRate           Fraction of files where the rule ran on the final chunk (not suppressed).
  */
 data class RuleAggregate(
     val ruleName: String,
     val weight: Float,
+    val nAi: Int,
+    val nHuman: Int,
     val meanSuspicionAi: Float,
     val meanSuspicionHuman: Float,
+    val stdAi: Float,
+    val stdHuman: Float,
+    val cohensD: Float,
+    val auc: Float,
+    val suggestedThreshold: Float,
+    val accuracyAtThreshold: Float,
     val meanConfidence: Float,
     val activeRate: Float
 ) {
@@ -139,27 +160,50 @@ data class ValidationSummary(
             "$tag s${"%.2f".format(d.suspicionScore)}/c${"%.2f".format(d.confidence)}$inactive"
         }
 
-    /** Per-rule discrimination table: mean suspicion split by ground truth + the AI−HUMAN gap. */
+    /**
+     * Per-rule discrimination table: suspicion split by ground truth plus separability metrics
+     * (AUC, Cohen's d) and the best standalone cutoff. Stats use only files where the rule voted.
+     */
     private fun printRuleStats() {
         if (ruleStats.isEmpty()) return
         println()
-        println("ANALYSE PAR RÈGLE (moyennes sur verdicts exploitables)")
-        println("  Règle                    Poids   Susp.IA   Susp.HUM   Écart   Conf.moy   Actif")
+        println("ANALYSE PAR RÈGLE — pouvoir discriminant (votes réels sur verdicts exploitables)")
+        println("  Règle                    Poids  n IA/HUM   IA±σ          HUM±σ          AUC     d       Seuil   Préc.   Verdict")
         ruleStats.forEach { r ->
             println(
-                "  ${r.ruleName.padEnd(24)} " +
-                        "%.2f".format(r.weight).padStart(5) + "   " +
-                        fmt(r.meanSuspicionAi).padStart(7) + "   " +
-                        fmt(r.meanSuspicionHuman).padStart(8) + "   " +
-                        fmtSigned(r.discriminationGap).padStart(5) + "   " +
-                        fmt(r.meanConfidence).padStart(8) + "   " +
-                        "${"%.0f".format(r.activeRate * 100)}%".padStart(5)
+                "  " + r.ruleName.padEnd(24) + " " +
+                        "%.2f".format(r.weight).padStart(5) + "  " +
+                        "${r.nAi}/${r.nHuman}".padEnd(9) + "  " +
+                        meanStd(r.meanSuspicionAi, r.stdAi).padEnd(13) + " " +
+                        meanStd(r.meanSuspicionHuman, r.stdHuman).padEnd(13) + "  " +
+                        fmt(r.auc).padStart(5) + "  " +
+                        fmtSigned(r.cohensD).padStart(6) + "  " +
+                        fmt(r.suggestedThreshold).padStart(5) + "  " +
+                        pct(r.accuracyAtThreshold).padStart(5) + "   " +
+                        verdict(r.auc)
             )
         }
-        println("  Écart > 0 ⇒ la règle attribue plus de suspicion aux vrais fakes (discrimine bien).")
+        println("  AUC≈0,50 ⇒ règle non discriminante · AUC<0,45 ⇒ direction à inverser · d = écart normalisé (Cohen).")
+        println("  Seuil = coupure de suspicion maximisant la précision de la règle seule ; Préc. = précision à ce seuil.")
     }
 
     private fun fmt(v: Float): String = if (v.isNaN()) "N/A" else "%.2f".format(v)
     private fun fmtSigned(v: Float): String = if (v.isNaN()) "N/A" else "%+.2f".format(v)
+    private fun pct(v: Float): String = if (v.isNaN()) "N/A" else "${"%.0f".format(v * 100)}%"
+
+    /** "mean±σ", or just the mean when σ is undefined (n < 2), or "N/A" when the rule never voted. */
+    private fun meanStd(m: Float, s: Float): String = when {
+        m.isNaN() -> "N/A"
+        s.isNaN() -> "%.2f".format(m)
+        else -> "%.2f±%.2f".format(m, s)
+    }
+
+    private fun verdict(auc: Float): String = when {
+        auc.isNaN() -> "n/a"
+        auc < 0.45f -> "INVERSER"
+        auc < 0.60f -> "FAIBLE"
+        auc < 0.75f -> "moyen"
+        else -> "FORT"
+    }
 }
 

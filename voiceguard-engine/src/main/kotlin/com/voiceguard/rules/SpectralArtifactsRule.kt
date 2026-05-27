@@ -24,9 +24,14 @@ import com.voiceguard.domain.port.SpectralClassifierPort
  * step and the first candidate to be deferred when R-03 already confirms organic human audio.
  *
  * @param classifier The spectral-classification backend — injected at construction.
+ * @param invertScore When true, the classifier's suspicion is inverted (1 − score). Calibrated on
+ *   the FoR validation split, where the band-limiting premise is reversed: the synthetic ("fake")
+ *   voices are high-quality and *brighter* than the human reads, so a full/bright high band is the
+ *   AI cue here, not a band-limited one. AUC on validation: 0.31 raw → ~0.69 inverted.
  */
 class SpectralArtifactsRule(
-    private val classifier: SpectralClassifierPort
+    private val classifier: SpectralClassifierPort,
+    private val invertScore: Boolean = false
 ) : AudioDetectionRule {
 
     override val name = "SpectralArtifactsRule"
@@ -37,7 +42,8 @@ class SpectralArtifactsRule(
     private var chunkCount = 0
 
     override suspend fun analyze(chunk: AudioChunk, context: ConversationContext): RuleResult {
-        val score = classifier.classify(chunk)
+        val raw = classifier.classify(chunk)
+        val score = if (invertScore) 1.0f - raw else raw
         chunkCount++
         val confidence = (chunkCount.toFloat() / RAMP_CHUNKS).coerceAtMost(1.0f)
         return RuleResult(score, confidence)
