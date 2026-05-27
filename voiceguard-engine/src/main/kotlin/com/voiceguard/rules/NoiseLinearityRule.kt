@@ -25,11 +25,11 @@ import kotlin.math.sqrt
  */
 class NoiseLinearityRule(
     private val silenceRmsThreshold: Float = 0.01f,
-    private val loopSimilarityThreshold: Float = 0.95f
+    private val loopSimilarityThreshold: Float = 0.95f,
+    override val weight: Float = 0.20f
 ) : AudioDetectionRule {
 
     override val name = "NoiseLinearityRule"
-    override val weight = 0.20f
 
     // This rule is the lightweight sentinel — it always runs, triggers early-exit evaluation,
     // and is never suppressed by intermittent sampling (ADR architecture §Detection Rules table).

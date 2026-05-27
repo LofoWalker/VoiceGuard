@@ -22,11 +22,11 @@ import kotlin.math.sqrt
  * utterance rather than only its dynamic segments.
  */
 class ProsodicDynamicsRule(
-    private val invertDirection: Boolean = false
+    private val invertDirection: Boolean = false,
+    override val weight: Float = 0.15f
 ) : AudioDetectionRule {
 
     override val name = "ProsodicDynamicsRule"
-    override val weight = 0.15f
 
     private val f0Contour = ArrayList<Float>()
     private val rmsEnvelope = ArrayList<Float>()

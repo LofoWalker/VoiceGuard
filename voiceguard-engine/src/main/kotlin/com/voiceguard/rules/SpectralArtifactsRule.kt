@@ -31,11 +31,11 @@ import com.voiceguard.domain.port.SpectralClassifierPort
  */
 class SpectralArtifactsRule(
     private val classifier: SpectralClassifierPort,
-    private val invertScore: Boolean = false
+    private val invertScore: Boolean = false,
+    override val weight: Float = 0.15f
 ) : AudioDetectionRule {
 
     override val name = "SpectralArtifactsRule"
-    override val weight = 0.15f
     override val isHeavyAnalysis = true
     override val canSkipOnEarlyExit = true
 

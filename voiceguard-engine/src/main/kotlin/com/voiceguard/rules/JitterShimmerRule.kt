@@ -20,10 +20,11 @@ import com.voiceguard.domain.port.AudioDetectionRule
  *
  * Confidence ramps over voiced chunks only — a file that is never voiced never gains confidence.
  */
-class JitterShimmerRule : AudioDetectionRule {
+class JitterShimmerRule(
+    override val weight: Float = 0.20f
+) : AudioDetectionRule {
 
     override val name = "JitterShimmerRule"
-    override val weight = 0.20f
     override val isHeavyAnalysis = true
 
     private var voicedChunks = 0

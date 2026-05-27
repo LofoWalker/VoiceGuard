@@ -28,7 +28,8 @@ import kotlin.math.sqrt
  * @param fftSize Power-of-two analysis window. Defaults to [DEFAULT_FFT_SIZE].
  */
 class CepstralPeakRule(
-    private val fftSize: Int = DEFAULT_FFT_SIZE
+    private val fftSize: Int = DEFAULT_FFT_SIZE,
+    override val weight: Float = 0.15f
 ) : AudioDetectionRule {
 
     init {
@@ -36,7 +37,6 @@ class CepstralPeakRule(
     }
 
     override val name = "CepstralPeakRule"
-    override val weight = 0.15f
     override val isHeavyAnalysis = true
 
     private var chunkCount = 0

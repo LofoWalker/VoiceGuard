@@ -338,7 +338,7 @@ class ValidationRunner(
         }
 
         /**
-         * Wires a fresh rule set for one file evaluation.
+         * Wires a fresh rule set for one file evaluation using the given [weights].
          * Called inside processorFactory so each file gets independent rule instances —
          * no mutable state (chunk counters, contours) leaks across file boundaries.
          *
@@ -351,14 +351,21 @@ class ValidationRunner(
          *   *both* classes acts as FPR ballast. Zero-weighting them lifts recall but triples FPR
          *   (R-02-flip alone scores humans at 0.69), a net accuracy loss — measured and rejected.
          * Weights renormalise automatically in [ScoreAggregator].
+         *
+         * The [weights] parameter defaults to [RuleWeightConfig.PRODUCTION] so existing call
+         * sites that pass no argument continue to use the calibrated production weights.
          */
-        private fun buildProductionRules(): List<AudioDetectionRule> =
+        internal fun buildProductionRules(weights: RuleWeightConfig = RuleWeightConfig.PRODUCTION): List<AudioDetectionRule> =
             listOf(
-                com.voiceguard.rules.NoiseLinearityRule(),
-                com.voiceguard.rules.SpectralArtifactsRule(com.voiceguard.adapters.FftSpectralClassifier(), invertScore = true),
-                com.voiceguard.rules.JitterShimmerRule(),
-                com.voiceguard.rules.CepstralPeakRule(),
-                com.voiceguard.rules.ProsodicDynamicsRule()
+                com.voiceguard.rules.NoiseLinearityRule(weight = weights.noiseLinearity),
+                com.voiceguard.rules.SpectralArtifactsRule(
+                    com.voiceguard.adapters.FftSpectralClassifier(),
+                    invertScore = true,
+                    weight = weights.spectralArtifacts
+                ),
+                com.voiceguard.rules.JitterShimmerRule(weight = weights.jitterShimmer),
+                com.voiceguard.rules.CepstralPeakRule(weight = weights.cepstralPeak),
+                com.voiceguard.rules.ProsodicDynamicsRule(weight = weights.prosodicDynamics)
             )
     }
 }

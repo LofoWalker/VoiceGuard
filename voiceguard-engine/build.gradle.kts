@@ -73,3 +73,52 @@ tasks.register<JavaExec>("validateEngine") {
     dependsOn(tasks.named("classes"))
 }
 
+// ---------------------------------------------------------------------------
+// sweepWeights — Weight-space exploration
+//
+// Runs N random weight combinations through the full pipeline and reports the
+// best-performing configuration together with a ranked table of all trials.
+// Use this to recalibrate rule weights after a dataset change without hand-tuning.
+//
+// Usage:
+//   ./gradlew :voiceguard-engine:sweepWeights -PdatasetPath=/path/to/dataset
+//   ./gradlew :voiceguard-engine:sweepWeights -PdatasetPath=/path/to/dataset \
+//       -PnRuns=100 -Pstep=0.05 -Pobjective=FPR_CONSTRAINED_RECALL -Pseed=42
+//
+// Options:
+//   -PdatasetPath=<dir>      (required) Root directory with real/ and fake/ subdirectories.
+//   -PnRuns=<int>            (optional) Number of weight combinations to try. Default: 50.
+//   -Pstep=<float>           (optional) Discretisation step for each weight in (0, 1].
+//                            Smaller step → finer grid, more distinct combinations. Default: 0.05.
+//   -Pparallelism=<int>      (optional) Concurrent workers. Default: physical core count (8 on
+//                            this machine). Each worker runs a full ValidationRunner independently.
+//   -Pobjective=<name>       (optional) Optimisation criterion:
+//                              FPR_CONSTRAINED_RECALL  maximise recall with FPR ≤ 5% (default)
+//                              ACCURACY                maximise raw accuracy
+//                              F1                      maximise F1 score
+//   -Pseed=<long>            (optional) PRNG seed for reproducibility. Default: 42.
+//
+// The report prints the best weight config and a Kotlin snippet ready to paste
+// into RuleWeightConfig.PRODUCTION.
+// ---------------------------------------------------------------------------
+tasks.register<JavaExec>("sweepWeights") {
+    group = "verification"
+    description = "Sweeps rule weights over N random combinations and reports the best config."
+
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.voiceguard.harness.WeightSweepRunner")
+
+    val datasetPath: String? = findProperty("datasetPath") as String?
+    if (datasetPath != null) {
+        args(datasetPath)
+    }
+    // If not provided, WeightSweepRunner.main() will print a clear error and exit.
+
+    // Forward sweep parameters as JVM system properties.
+    listOf("nRuns", "step", "objective", "seed", "parallelism").forEach { prop ->
+        findProperty(prop)?.let { systemProperty(prop, it.toString()) }
+    }
+
+    dependsOn(tasks.named("classes"))
+}
+
