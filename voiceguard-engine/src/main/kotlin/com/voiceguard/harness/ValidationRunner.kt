@@ -240,9 +240,6 @@ class ValidationRunner(
 
     companion object {
         private val SUPPORTED_EXTENSIONS = setOf("wav", "mp3")
-        // KPI targets from PRD §6.2
-        private const val KPI_MIN_ACCURACY = 0.85f
-        private const val KPI_MAX_FPR = 0.05f
         private val HUMAN_DIR_NAMES = setOf("real", "human")
         private val AI_DIR_NAMES = setOf("fake", "ai", "deepfake")
         private const val NS_TO_MS = 1_000_000.0
@@ -280,9 +277,8 @@ class ValidationRunner(
                     datasetDir = datasetDir,
                     processorFactory = { DetectionOrchestratorAdapter(DetectionOrchestrator(buildProductionRules())) },
                     // Resample to a common rate (removes the real-16k / fake-24k confound) and use
-                    // the decision threshold calibrated on the validation split: its sweep shows a
-                    // cliff at 0.50→0.55 where FPR drops 29%→3% — 0.55 is the accuracy-max AND the
-                    // lowest cutoff meeting the FPR ≤ 5% KPI.
+                    // the decision threshold calibrated on the validation split to satisfy the
+                    // FPR ≤ 5% KPI. See the printed threshold sweep for the measured operating point.
                     config = ValidationConfig(
                         targetSampleRate = NORMALISED_SAMPLE_RATE,
                         aiThreshold = CALIBRATED_AI_THRESHOLD
@@ -309,16 +305,16 @@ class ValidationRunner(
                 return true
             }
             var passed = true
-            if (!summary.accuracy.isNaN() && summary.accuracy < KPI_MIN_ACCURACY) {
+            if (!summary.accuracy.isNaN() && summary.accuracy < ValidationConfig.KPI_MIN_ACCURACY) {
                 System.err.println("[VoiceGuard] KPI échoué : précision ${
                     "%.1f".format(summary.accuracy * 100)}% < cible ${
-                    "%.0f".format(KPI_MIN_ACCURACY * 100)}%")
+                    "%.0f".format(ValidationConfig.KPI_MIN_ACCURACY * 100)}%")
                 passed = false
             }
-            if (!summary.falsePositiveRate.isNaN() && summary.falsePositiveRate > KPI_MAX_FPR) {
+            if (!summary.falsePositiveRate.isNaN() && summary.falsePositiveRate > ValidationConfig.KPI_MAX_FPR) {
                 System.err.println("[VoiceGuard] KPI échoué : FPR ${
                     "%.1f".format(summary.falsePositiveRate * 100)}% > cible ${
-                    "%.0f".format(KPI_MAX_FPR * 100)}%")
+                    "%.0f".format(ValidationConfig.KPI_MAX_FPR * 100)}%")
                 passed = false
             }
             if (summary.budgetViolationCount > 0) {
@@ -372,6 +368,11 @@ data class ValidationConfig(
     val targetSampleRate: Int? = null
 ) {
     companion object {
+        // KPI targets from PRD §6.2 — centralised here so ValidationSummary and
+        // ValidationRunner share the same source of truth.
+        const val KPI_MIN_ACCURACY = 0.85f
+        const val KPI_MAX_FPR = 0.05f
+
         const val DEFAULT_AI_THRESHOLD = 0.5f
 
         // On a dataset of isolated utterances (no conversational turn-taking), R-01

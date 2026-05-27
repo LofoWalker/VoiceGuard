@@ -85,6 +85,9 @@ data class ThresholdPoint(
  * @param maxLatencyMs        Peak per-chunk processing time in milliseconds.
  * @param budgetViolationCount Chunks where processing exceeded the budget.
  * @param ruleStats           Per-rule aggregated performance over countable verdicts.
+ * @param thresholdSweep      Per-threshold accuracy / FPR / recall trade-off curve over countable
+ *                            verdicts; empty when both classes are not present or when no countable
+ *                            verdicts exist. Calibrate the operating point on the validation split.
  * @param verdicts            Full list of per-file outcomes.
  */
 data class ValidationSummary(
@@ -218,7 +221,7 @@ data class ValidationSummary(
             )
         }
         val bestAcc = thresholdSweep.maxByOrNull { it.accuracy }!!
-        val fprOk = thresholdSweep.filter { it.falsePositiveRate <= 0.05f }.maxByOrNull { it.recall }
+        val fprOk = thresholdSweep.filter { it.falsePositiveRate <= ValidationConfig.KPI_MAX_FPR }.maxByOrNull { it.recall }
         println("  → Accuracy max : seuil ${"%.2f".format(bestAcc.threshold)} ⇒ " +
                 "acc ${pct(bestAcc.accuracy)}, FPR ${pct(bestAcc.falsePositiveRate)}, recall ${pct(bestAcc.recall)}")
         if (fprOk != null)
