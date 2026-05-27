@@ -112,9 +112,12 @@ data class ValidationSummary(
 ) {
     /**
      * Prints a human-readable summary to [System.out].
-     * Includes confusion matrix and recall. Lists all misclassified files for triage.
+     *
+     * @param verbose When true, prints the full list of misclassified files with per-rule
+     *   diagnostics. When false (default), only the count is shown and a hint to re-run
+     *   with `-Pverbose` is displayed. Pass via Gradle: `./gradlew validateEngine … -Pverbose`.
      */
-    fun printReport() {
+    fun printReport(verbose: Boolean = false) {
         val sep = "=".repeat(60)
         println(sep)
         println("VOICEGUARD VALIDATION REPORT")
@@ -151,6 +154,8 @@ data class ValidationSummary(
         val misclassified = verdicts.filter { !it.isCorrect }
         if (misclassified.isEmpty()) {
             println("Aucun fichier mal classé.")
+        } else if (!verbose) {
+            println("Fichiers mal classés : ${misclassified.size}  (relancer avec -Pverbose pour le détail)")
         } else {
             println("FICHIERS MAL CLASSÉS (${misclassified.size})")
             println("  Détail par règle : <initiales> s=suspicion c=confiance (* = inactive au dernier chunk)")

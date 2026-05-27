@@ -286,7 +286,9 @@ class ValidationRunner(
                 ).runValidation()
             }
 
-            summary.printReport()
+            // -Pverbose (Gradle property forwarded as JVM system property) ou "-v" comme argument.
+            val verbose = System.getProperty("verbose") != null || args.contains("-v")
+            summary.printReport(verbose)
 
             if (!checkKpis(summary)) {
                 System.err.println("[VoiceGuard] KPI non atteints — exit 1 (voir rapport ci-dessus)")
