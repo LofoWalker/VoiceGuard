@@ -44,6 +44,17 @@ data class RuleAggregate(
 }
 
 /**
+ * One point on the decision-threshold trade-off curve: the confusion metrics that would result
+ * from classifying a countable verdict as AI when its aiProbability is at or above [threshold].
+ */
+data class ThresholdPoint(
+    val threshold: Float,
+    val accuracy: Float,
+    val falsePositiveRate: Float,
+    val recall: Float
+)
+
+/**
  * Aggregated outcome of one full validation run across a dataset directory.
  *
  * Accuracy, FPR, and recall are computed only over verdicts where
@@ -74,6 +85,9 @@ data class RuleAggregate(
  * @param maxLatencyMs        Peak per-chunk processing time in milliseconds.
  * @param budgetViolationCount Chunks where processing exceeded the budget.
  * @param ruleStats           Per-rule aggregated performance over countable verdicts.
+ * @param thresholdSweep      Per-threshold accuracy / FPR / recall trade-off curve over countable
+ *                            verdicts; empty when both classes are not present or when no countable
+ *                            verdicts exist. Calibrate the operating point on the validation split.
  * @param verdicts            Full list of per-file outcomes.
  */
 data class ValidationSummary(
@@ -93,6 +107,7 @@ data class ValidationSummary(
     val maxLatencyMs: Long,
     val budgetViolationCount: Int,
     val ruleStats: List<RuleAggregate> = emptyList(),
+    val thresholdSweep: List<ThresholdPoint> = emptyList(),
     val verdicts: List<ValidationVerdict>
 ) {
     /**
@@ -124,6 +139,7 @@ data class ValidationSummary(
             println("  Réel HUMAN        ${(totalHumanFiles - falsePositives).toString().padStart(12)}   ${falsePositives.toString().padStart(9)}")
             println("  Réel AI           ${falseNegatives.toString().padStart(12)}   ${truePositives.toString().padStart(9)}")
             printRuleStats()
+            printThresholdSweep()
         }
         println()
         println("LATENCE")
@@ -185,6 +201,34 @@ data class ValidationSummary(
         }
         println("  AUC≈0,50 ⇒ règle non discriminante · AUC<0,45 ⇒ direction à inverser · d = écart normalisé (Cohen).")
         println("  Seuil = coupure de suspicion maximisant la précision de la règle seule ; Préc. = précision à ce seuil.")
+    }
+
+    /**
+     * Decision-threshold trade-off curve plus the two operating points worth knowing: the
+     * accuracy-maximising cutoff, and the lowest cutoff that still meets the FPR ≤ 5% KPI.
+     */
+    private fun printThresholdSweep() {
+        if (thresholdSweep.isEmpty()) return
+        println()
+        println("BALAYAGE DU SEUIL DE DÉCISION (sur verdicts exploitables — calibrer sur validation)")
+        println("  Seuil   Accuracy   FPR     Recall")
+        thresholdSweep.forEach { p ->
+            println(
+                "  " + "%.2f".format(p.threshold).padStart(5) + "   " +
+                        pct(p.accuracy).padStart(7) + "   " +
+                        pct(p.falsePositiveRate).padStart(6) + "  " +
+                        pct(p.recall).padStart(6)
+            )
+        }
+        val bestAcc = thresholdSweep.maxByOrNull { it.accuracy }!!
+        val fprOk = thresholdSweep.filter { it.falsePositiveRate <= ValidationConfig.KPI_MAX_FPR }.maxByOrNull { it.recall }
+        println("  → Accuracy max : seuil ${"%.2f".format(bestAcc.threshold)} ⇒ " +
+                "acc ${pct(bestAcc.accuracy)}, FPR ${pct(bestAcc.falsePositiveRate)}, recall ${pct(bestAcc.recall)}")
+        if (fprOk != null)
+            println("  → FPR ≤ 5% : seuil ${"%.2f".format(fprOk.threshold)} ⇒ " +
+                    "acc ${pct(fprOk.accuracy)}, FPR ${pct(fprOk.falsePositiveRate)}, recall ${pct(fprOk.recall)}")
+        else
+            println("  → FPR ≤ 5% : aucun seuil n'atteint la cible sur cet ensemble.")
     }
 
     private fun fmt(v: Float): String = if (v.isNaN()) "N/A" else "%.2f".format(v)
