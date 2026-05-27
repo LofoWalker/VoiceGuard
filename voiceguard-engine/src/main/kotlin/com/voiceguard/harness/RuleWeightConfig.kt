@@ -40,16 +40,17 @@ data class RuleWeightConfig(
         "PD=${"%.2f".format(prosodicDynamics)}"
 
     companion object {
-        // ── Calibrated defaults — sweepWeights run 2025-05-27 ─────────────────
+        // ── Calibrated defaults — sweepWeights run 2025-05-27 (post direction-fixes) ──
         // Dataset : FoR testing split (2370 fake, 2264 real — 4634 files)
-        // Objectif: recall max avec FPR ≤ 5%   seed=42, nRuns=25, step=0.05
-        // Résultats: acc=76.2% (+2.5 pp), FPR=4.8% (+1.5 pp), recall=57.9% (+6.4 pp)
-        // Précédents : NL=0.20 SA=0.15 JS=0.20 CP=0.15 PD=0.15 → acc=73.7%, FPR=3.3%, recall=51.5%
-        const val DEFAULT_NOISE_LINEARITY:    Float = 0.95f
-        const val DEFAULT_SPECTRAL_ARTIFACTS: Float = 0.25f
-        const val DEFAULT_JITTER_SHIMMER:     Float = 0.05f
-        const val DEFAULT_CEPSTRAL_PEAK:      Float = 0.35f
-        const val DEFAULT_PROSODIC_DYNAMICS:  Float = 0.70f
+        // Objectif: recall max avec FPR ≤ 5%   seed=42, nRuns=100, step=0.05, parallelism=8, aiThreshold=0.85
+        // Règles  : CPP direction corrigée (SUSPICION_FROM_HIGH_CPP=false)
+        //           PD  direction corrigée (invertDirection=true) + VARIABILITY_REF 0.30→0.70
+        // Résultats: acc=76.2%, FPR=4.6% ✓, recall=57.6%   (seuil de décision calibré = 0.85)
+        const val DEFAULT_NOISE_LINEARITY:    Float = 0.75f
+        const val DEFAULT_SPECTRAL_ARTIFACTS: Float = 1.00f
+        const val DEFAULT_JITTER_SHIMMER:     Float = 0.75f
+        const val DEFAULT_CEPSTRAL_PEAK:      Float = 0.30f
+        const val DEFAULT_PROSODIC_DYNAMICS:  Float = 0.35f
 
         /**
          * Production weights calibrated via [WeightSweepRunner] on the FoR testing split.

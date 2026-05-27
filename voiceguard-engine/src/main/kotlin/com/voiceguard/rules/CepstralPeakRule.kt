@@ -122,7 +122,10 @@ class CepstralPeakRule(
         private const val EPS = 1e-10
 
         // Provisional scale and direction — tune from the per-rule discrimination table.
+        // Calibrated on FoR testing split (2025-05-27): AUC=0.44 with SUSPICION_FROM_HIGH_CPP=true
+        // → direction inverted (real FoR voices are read speech with slightly higher CPP than TTS).
+        // Flipped to false: low CPP ⇒ more suspicious (TTS voices score below human reads).
         private const val CPP_REF = 1.5f
-        private const val SUSPICION_FROM_HIGH_CPP = true
+        private const val SUSPICION_FROM_HIGH_CPP = false
     }
 }

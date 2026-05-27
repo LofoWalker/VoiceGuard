@@ -115,7 +115,7 @@ tasks.register<JavaExec>("sweepWeights") {
     // If not provided, WeightSweepRunner.main() will print a clear error and exit.
 
     // Forward sweep parameters as JVM system properties.
-    listOf("nRuns", "step", "objective", "seed", "parallelism").forEach { prop ->
+    listOf("nRuns", "step", "objective", "seed", "parallelism", "aiThreshold").forEach { prop ->
         findProperty(prop)?.let { systemProperty(prop, it.toString()) }
     }
 

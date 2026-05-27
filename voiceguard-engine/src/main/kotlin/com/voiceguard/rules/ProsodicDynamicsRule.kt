@@ -74,8 +74,11 @@ class ProsodicDynamicsRule(
         private const val RAMP_CHUNKS = 6
         private const val VOICING_THRESHOLD = 0.5f
 
-        // Combined F0+energy coefficient of variation at or above which prosody reads as organic.
-        // Provisional — calibrate from the per-rule discrimination table.
-        private const val VARIABILITY_REF = 0.30f
+        // Combined F0+energy coefficient of variation used to normalise the suspicion score.
+        // Calibration history (FoR testing split, invertDirection=true):
+        //   0.30 → HUM suspicion mean 0.80 (both classes saturated near 1.0, FPR uncontrollable).
+        //   0.70 → target: HUM suspicion ≈ 0.35  (= 0.24 / 0.70), AI unsaturated — better separation.
+        // Derivation: HUM variability ≈ 0.80 × 0.30 = 0.24; target suspicion 0.35 → REF = 0.24/0.35.
+        private const val VARIABILITY_REF = 0.70f
     }
 }

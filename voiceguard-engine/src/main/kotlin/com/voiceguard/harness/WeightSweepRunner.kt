@@ -276,7 +276,7 @@ class WeightSweepRunner(
     private val objective: SweepObjective = SweepObjective.FPR_CONSTRAINED_RECALL,
     private val validationConfig: ValidationConfig = ValidationConfig(
         targetSampleRate = 16_000,
-        aiThreshold = 0.55f
+        aiThreshold = DEFAULT_AI_THRESHOLD
     ),
     private val seed: Long = DEFAULT_SEED
 ) {
@@ -419,6 +419,7 @@ class WeightSweepRunner(
         const val DEFAULT_N_RUNS      = 50
         const val DEFAULT_STEP        = 0.05f
         const val DEFAULT_SEED        = 42L
+        const val DEFAULT_AI_THRESHOLD = ValidationConfig.DEFAULT_AI_THRESHOLD
         /** One worker per physical core — optimal for NVMe I/O + light CPU on an 8-core machine. */
         val DEFAULT_PARALLELISM       = Runtime.getRuntime().availableProcessors() / 2
 
@@ -457,10 +458,11 @@ class WeightSweepRunner(
                     "Pass it as the first argument or via -PdatasetPath=<path>"
                 )
 
-            val nRuns       = System.getProperty("nRuns")?.toIntOrNull()       ?: DEFAULT_N_RUNS
-            val step        = System.getProperty("step")?.toFloatOrNull()      ?: DEFAULT_STEP
-            val seed        = System.getProperty("seed")?.toLongOrNull()       ?: DEFAULT_SEED
-            val parallelism = System.getProperty("parallelism")?.toIntOrNull() ?: DEFAULT_PARALLELISM
+            val nRuns       = System.getProperty("nRuns")?.toIntOrNull()        ?: DEFAULT_N_RUNS
+            val step        = System.getProperty("step")?.toFloatOrNull()       ?: DEFAULT_STEP
+            val seed        = System.getProperty("seed")?.toLongOrNull()        ?: DEFAULT_SEED
+            val parallelism = System.getProperty("parallelism")?.toIntOrNull()  ?: DEFAULT_PARALLELISM
+            val aiThreshold = System.getProperty("aiThreshold")?.toFloatOrNull() ?: DEFAULT_AI_THRESHOLD
 
             val objective = System.getProperty("objective")
                 ?.uppercase()
@@ -483,16 +485,21 @@ class WeightSweepRunner(
 
             println(
                 "[WeightSweep] Démarrage — $nRuns runs, step=${"%.2f".format(step)}, " +
-                "parallelisme=$parallelism, objectif=${objective.label()}, seed=$seed"
+                "parallelisme=$parallelism, objectif=${objective.label()}, " +
+                "aiThreshold=${"%.2f".format(aiThreshold)}, seed=$seed"
             )
 
             val summary = WeightSweepRunner(
-                datasetDir  = datasetDir,
-                nRuns       = nRuns,
-                step        = step,
-                parallelism = parallelism,
-                objective   = objective,
-                seed        = seed
+                datasetDir        = datasetDir,
+                nRuns             = nRuns,
+                step              = step,
+                parallelism       = parallelism,
+                objective         = objective,
+                validationConfig  = ValidationConfig(
+                    targetSampleRate = 16_000,
+                    aiThreshold      = aiThreshold
+                ),
+                seed              = seed
             ).run()
 
             summary.printReport()
