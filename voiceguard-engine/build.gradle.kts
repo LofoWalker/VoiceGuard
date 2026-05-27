@@ -37,6 +37,12 @@ tasks.test {
 //
 // Usage:
 //   ./gradlew :voiceguard-engine:validateEngine -PdatasetPath=/path/to/dataset
+//   ./gradlew :voiceguard-engine:validateEngine -PdatasetPath=/path/to/dataset -Pverbose
+//
+// Options:
+//   -PdatasetPath=<dir>  (required) Root directory containing real/ and fake/ subdirectories.
+//   -Pverbose            (optional) Print full list of misclassified files with per-rule detail.
+//                        Without this flag only the count is shown.
 //
 // Dataset directory must contain `real/` (or `human/`) and `fake/` (or `ai/`)
 // subdirectories holding 16-bit mono 16 kHz WAV files.
@@ -55,6 +61,14 @@ tasks.register<JavaExec>("validateEngine") {
         args(datasetPath)
     }
     // If not provided, ValidationRunner.main() will print a clear error and exit.
+
+    // Forward -Pverbose as a JVM system property so ValidationRunner can read it.
+    // Bare -Pverbose yields an empty string; map that to "true". Explicit -Pverbose=false
+    // propagates "false" so the runner can correctly disable verbose mode.
+    val verboseProp = findProperty("verbose")
+    if (verboseProp != null) {
+        systemProperty("verbose", verboseProp.toString().ifEmpty { "true" })
+    }
 
     dependsOn(tasks.named("classes"))
 }
