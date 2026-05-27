@@ -163,8 +163,34 @@ class ValidationRunner(
             maxLatencyMs = maxLatencyMs,
             budgetViolationCount = violations,
             ruleStats = computeRuleAggregates(countable),
+            thresholdSweep = computeThresholdSweep(countable),
             verdicts = verdicts
         )
+    }
+
+    /**
+     * Sweeps the AI-probability decision threshold over the countable verdicts to expose the
+     * accuracy / FPR / recall trade-off curve. The aggregate scoring is fixed; only the cutoff on
+     * [ValidationVerdict.aiProbability] varies — so this reads off the operating point without
+     * re-running the pipeline. Calibrate the threshold here on the validation split, not testing.
+     */
+    private fun computeThresholdSweep(countable: List<ValidationVerdict>): List<ThresholdPoint> {
+        if (countable.isEmpty()) return emptyList()
+        val ai = countable.filter { it.groundTruth == GroundTruthLabel.AI }
+        val human = countable.filter { it.groundTruth == GroundTruthLabel.HUMAN }
+        if (ai.isEmpty() || human.isEmpty()) return emptyList()
+
+        return (1..19).map { step ->
+            val t = step * 0.05f
+            val tp = ai.count { it.aiProbability >= t }
+            val fp = human.count { it.aiProbability >= t }
+            ThresholdPoint(
+                threshold = t,
+                accuracy = (tp + (human.size - fp)).toFloat() / countable.size,
+                falsePositiveRate = fp.toFloat() / human.size,
+                recall = tp.toFloat() / ai.size
+            )
+        }
     }
 
     /**
@@ -225,6 +251,9 @@ class ValidationRunner(
         // sample-rate/label confound (real 16 kHz vs fake 24 kHz).
         private const val NORMALISED_SAMPLE_RATE = 16_000
 
+        // AI-probability decision threshold calibrated on the FoR validation split (sweep optimum).
+        private const val CALIBRATED_AI_THRESHOLD = 0.55f
+
         /**
          * Entry point for Gradle-triggered validation.
          *
@@ -250,9 +279,14 @@ class ValidationRunner(
                 ValidationRunner(
                     datasetDir = datasetDir,
                     processorFactory = { DetectionOrchestratorAdapter(DetectionOrchestrator(buildProductionRules())) },
-                    // Step 1: resample every file to a common rate so bandwidth-based rules judge
-                    // synthesis artifacts, not the dataset's real-16k / fake-24k sample-rate confound.
-                    config = ValidationConfig(targetSampleRate = NORMALISED_SAMPLE_RATE)
+                    // Resample to a common rate (removes the real-16k / fake-24k confound) and use
+                    // the decision threshold calibrated on the validation split: its sweep shows a
+                    // cliff at 0.50→0.55 where FPR drops 29%→3% — 0.55 is the accuracy-max AND the
+                    // lowest cutoff meeting the FPR ≤ 5% KPI.
+                    config = ValidationConfig(
+                        targetSampleRate = NORMALISED_SAMPLE_RATE,
+                        aiThreshold = CALIBRATED_AI_THRESHOLD
+                    )
                 ).runValidation()
             }
 
@@ -304,7 +338,10 @@ class ValidationRunner(
          * - R-06 left default: flipping it improved ranking (AUC) but tripled FPR on the aggregate
          *   (both classes scored high), so it is a net loss — kept in its original direction.
          * - R-01 dropped: 0 votes on isolated utterances (no turn-taking) — pure weight dilution.
-         * Remaining weights renormalise automatically in [ScoreAggregator] (no manual rebalancing).
+         * - R-04/R-05/R-06 kept at default weight despite weak AUC: their near-zero suspicion on
+         *   *both* classes acts as FPR ballast. Zero-weighting them lifts recall but triples FPR
+         *   (R-02-flip alone scores humans at 0.69), a net accuracy loss — measured and rejected.
+         * Weights renormalise automatically in [ScoreAggregator].
          */
         private fun buildProductionRules(): List<AudioDetectionRule> =
             listOf(
