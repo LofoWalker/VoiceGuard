@@ -27,9 +27,9 @@ infrastructure concerns (audio drivers, TFLite bindings, Android APIs).
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                        Adapters (Infrastructure)               │
-│  ┌──────────────────┐  ┌────────────────┐  ┌────────────────┐  │
-│  │  AudioSource     │  │  TFLiteAdapter │  │  TestHarness   │  │
-│  │  (mic / dataset) │  │  (SpectralRule)│  │  (Gradle task) │  │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
+│  │  AudioSource     │  │  FftSpectral     │  │  TestHarness   │  │
+│  │  (mic / dataset) │  │  Classifier (R-02)│  │  (Gradle task) │  │
 │  └────────┬─────────┘  └───────┬────────┘  └───────┬────────┘  │
 │           │                   │                    │           │
 │  ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─ ─ ─  │
@@ -53,7 +53,7 @@ constructor injection.
 ## Package Structure
 
 ```
-voiceguard-engine/
+voiceguard-engine/src/main/kotlin/com/voiceguard/
 ├── domain/
 │   ├── model/
 │   │   ├── AudioChunk.kt           # Raw PCM payload value object
@@ -61,18 +61,20 @@ voiceguard-engine/
 │   │   └── DetectionUiState.kt     # Aggregated state emitted to consumers
 │   ├── port/
 │   │   ├── AudioDetectionRule.kt   # Primary port — all rules implement this
-│   │   └── AudioSourcePort.kt      # Secondary port — audio stream provider
+│   │   ├── AudioSourcePort.kt      # Secondary port — audio stream provider
+│   │   └── SpectralClassifierPort.kt  # Secondary port — per-chunk spectral score
 │   ├── service/
 │   │   ├── DetectionOrchestrator.kt
-│   │   └── ScoreAggregator.kt
+│   │   ├── ScoreAggregator.kt
+│   │   └── AudioDsp.kt             # Shared DSP utilities (computeRms)
 │   └── context/
 │       └── ConversationContext.kt  # Speech-switch timestamps, history
 ├── rules/
 │   ├── LatencyBehaviorRule.kt      # R-01
-│   ├── SpectralArtifactsRule.kt    # R-02
+│   ├── SpectralArtifactsRule.kt    # R-02 (delegates to SpectralClassifierPort)
 │   └── NoiseLinearityRule.kt       # R-03
 ├── adapters/
-│   ├── TFLiteSpectralAdapter.kt    # TFLite inference wrapper for R-02
+│   ├── FftSpectralClassifier.kt    # DSP/FFT implementation of SpectralClassifierPort
 │   └── DatasetAudioSource.kt       # File-based AudioSource for test harness
 └── harness/
     └── ValidationRunner.kt         # Gradle-triggered batch scorer
@@ -109,7 +111,7 @@ reaction delay without coupling itself to system time.
 | ID | Class | Weight | Activation Delay | Signal Type |
 |----|-------|--------|-----------------|-------------|
 | R-01 | `LatencyBehaviorRule` | 0.40 | After first speech switch | Behavioral |
-| R-02 | `SpectralArtifactsRule` | 0.35 | Incremental from chunk 1 | TFLite (TPU) |
+| R-02 | `SpectralArtifactsRule` | 0.35 | Incremental from chunk 1 | DSP (FFT, JVM) |
 | R-03 | `NoiseLinearityRule` | 0.25 | Max confidence by 2 s | DSP |
 
 ### R-01 — LatencyBehaviorRule (weight 0.40)
@@ -123,10 +125,18 @@ to be excluded from the weighted formula during the warm-up phase.
 
 ### R-02 — SpectralArtifactsRule (weight 0.35)
 
-TTS vocoders (ElevenLabs, OpenAI TTS, Kokoro) leave geometric phase artifacts in the frequency
-domain — quantization scars, band-limited harmonics, periodic spectral tiling. A small TFLite
-model, executing on the Tensor G4 NPU, classifies each 500 ms chunk and emits an incremental
-suspicion score. Confidence grows chunk-by-chunk as the model stabilizes.
+TTS vocoders (ElevenLabs, OpenAI TTS, Kokoro) impose a characteristic spectral signature:
+a hard band-limiting filter (typically 6–12 kHz) and an unusually uniform mid-band energy
+profile. `FftSpectralClassifier` detects these using a pure-JVM Cooley-Tukey FFT (4096-point,
+Hann window) and two heuristics:
+
+1. **Band-limiting score** — ratio of high-frequency (> 6 kHz) to mid-frequency (1–4 kHz)
+   energy. Natural speech fills the high band; TTS pipelines attenuate it sharply.
+2. **Spectral flatness (Wiener entropy)** — measures how tonally uniform the spectrum is.
+   An unusually flat mid-band profile suggests vocoder background fill.
+
+The classifier is injected via `SpectralClassifierPort` so it can be replaced by a trained
+ML model (Phase 2) without touching the rule or the domain layer.
 
 ### R-03 — NoiseLinearityRule (weight 0.25)
 
@@ -212,9 +222,12 @@ floor for the first second.
 | Phase | Elapsed | globalConfidence | Active Rules |
 |-------|---------|-----------------|--------------|
 | Warm-up | 0–1 s | forced 0.0 | None (buffers filling) |
-| Initial acoustics | 1–2 s | ≈ 20 % | R-03 (max confidence) |
-| Stabilization | 3–5 s | ≈ 70 % | R-02 incremental + R-03 |
-| Behavioral verdict | First switch+ | ≥ 90 % | R-01 + R-02 + R-03 |
+| Initial acoustics | 1–2 s | ~20 % (indicative) | R-03 (max confidence) |
+| Stabilization | 3–5 s | ~70 % (indicative) | R-02 incremental + R-03 |
+| Behavioral verdict | First switch+ | ≥ 90 % (indicative) | R-01 + R-02 + R-03 |
+
+> **Note:** confidence percentages are indicative; actual values depend on the audio signal
+> and will be re-baselined once a real dataset is evaluated.
 
 The UI should display `aiProbability` with a visual muted state when `globalConfidence < 0.6`
 to prevent the user from acting on an unreliable early reading.
@@ -230,16 +243,17 @@ Three mechanisms ensure the engine consumes negligible CPU/battery on a Pixel 9a
 
 After scoring each chunk, the orchestrator evaluates a lightweight "human confirmed" condition.
 If R-03 returns `suspicionScore < 0.05` with `confidence = 1.0` (organic, non-linear noise
-confirmed), the orchestrator skips dispatching R-02 (the TFLite model) for that chunk. This
-short-circuits the most expensive operation when the evidence is already clear.
+confirmed), the orchestrator skips dispatching R-02 (`FftSpectralClassifier`) for that chunk.
+The FFT computation is the costliest per-chunk operation, so this short-circuit is the primary
+CPU saving for calls with clearly organic audio.
 
-### TPU Delegation (TFLite)
+### FFT-Based Spectral Classification (Phase 1)
 
-The spectral classification model is compiled to `.tflite` format and loaded with
-`GpuDelegate` / `NnApiDelegate` (targeting the Tensor G4 NPU). The CPU is not involved in
-matrix multiplication during inference. R-02 must never fall back to CPU inference in
-production — a `NnApiDelegate` availability check gates model initialization and surfaces a
-warning if hardware acceleration is unavailable.
+`FftSpectralClassifier` runs a Cooley-Tukey radix-2 DIT FFT (O(N log N), N=4096) on each
+500 ms chunk with a Hann window to reduce spectral leakage. All arithmetic is JVM floating
+point — no native library required. Phase 2 will replace this with a trained TFLite model
+delegated to the NPU via `NnApiDelegate`, plugged in through the same `SpectralClassifierPort`
+seam without modifying any rule or orchestrator code.
 
 ### Intermittent Sampling
 
@@ -258,8 +272,8 @@ during long uninterrupted speech segments.
 | Language | Kotlin 2.x | Coroutines, value classes, sealed classes |
 | Build | Gradle (Kotlin DSL) | Plugin ecosystem for Kotlin multiplatform path |
 | Async | Kotlin Coroutines + StateFlow | Reactive backpressure without RxJava overhead |
-| DSP | Kotlin + JVM math (FFT) | Pure-JVM for Phase 1; replace with NNAPI in Phase 2 |
-| ML Inference | TensorFlow Lite | NPU delegation, minimal binary size |
+| DSP | Kotlin + JVM math (FFT) | Pure-JVM Cooley-Tukey FFT; Phase 2 replaces with TFLite via SpectralClassifierPort |
+| ML Inference | TensorFlow Lite (Phase 2) | NPU delegation via NnApiDelegate; not yet integrated |
 | Testing | JUnit 5 + kotlinx-coroutines-test | `UnconfinedTestDispatcher` for deterministic flow testing |
 | Datasets | FoR-rerec + HuggingFace Deepfake | Open-source, telephone-channel degraded samples |
 
@@ -269,10 +283,14 @@ during long uninterrupted speech segments.
 
 ### ADR-01: Pure-JVM Domain in Phase 1
 
-**Decision:** No Android SDK import in `domain/` or `rules/` modules.
-**Rationale:** Enables fast JVM unit tests on CI without an emulator. The TFLite adapter for
-R-02 is mocked in tests using a `FakeSpectralClassifier` that returns pre-seeded scores.
-**Trade-off:** R-02 cannot be validated end-to-end until the Android adapter is wired in Phase 2.
+**Decision:** No Android SDK import in `domain/` or `rules/` modules. R-02 is implemented
+as a pure-JVM FFT classifier (`FftSpectralClassifier`) rather than a TFLite stub.
+**Rationale:** Enables fast JVM unit tests on CI without an emulator. The spectral classifier
+is injected via `SpectralClassifierPort` and can be swapped for a `FakeSpectralClassifier`
+in tests, or for a TFLite model in Phase 2, without touching domain code.
+**Trade-off:** The DSP heuristics catch coarse vocoder artifacts (hard band-limiting, flat
+mid-band) but will not reliably detect high-quality modern TTS — KPIs must be re-baselined
+once a real dataset is evaluated.
 
 ### ADR-02: Monotone Confidence Signal
 
@@ -287,6 +305,13 @@ legitimately reset audio analysis is invisible to the confidence gauge.
 **Decision:** Rules receive `ConversationContext` by reference but must not mutate it directly.
 Only the orchestrator writes to `ConversationContext` (speech switch timestamps, call duration).
 **Rationale:** Prevents race conditions when rules execute in parallel coroutines.
+**Important:** Although rules are stateless *per-chunk* (they do not write to shared state
+during analysis), some rules (`NoiseLinearityRule`, `SpectralArtifactsRule`) maintain
+**per-stream** mutable state (ramp counters, previous amplitude profile) to accumulate
+confidence across chunks. This state is valid only within a single audio stream — each new
+file or call must receive a fresh rule instance. The `ValidationRunner` enforces this by
+calling `buildProductionRules()` inside the `processorFactory` lambda, so every file gets
+independent rule instances with clean state.
 
 ### ADR-04: Score NaN Guard
 

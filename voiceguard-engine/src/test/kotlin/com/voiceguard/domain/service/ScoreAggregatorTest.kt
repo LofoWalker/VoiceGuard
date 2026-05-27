@@ -65,15 +65,27 @@ class ScoreAggregatorTest {
         assertFalse(result.isInfinite(), "aiProbability must never be infinite")
     }
 
-    // computeRawConfidence: weighted average of individual confidences.
+    // computeRawConfidence: weighted average of individual confidences relative to all configured rules.
     @Test
-    fun `computeRawConfidence is weighted average of confidences`() {
+    fun `computeRawConfidence is weighted average of confidences over total configured weight`() {
         val contributions = listOf(
             RuleContribution(weight = 0.6f, suspicionScore = 0.0f, confidence = 0.8f),
             RuleContribution(weight = 0.4f, suspicionScore = 0.0f, confidence = 0.4f)
         )
-        // (0.6*0.8 + 0.4*0.4) / (0.6+0.4) = (0.48 + 0.16) / 1.0 = 0.64
-        assertEquals(0.64, aggregator.computeRawConfidence(contributions).toDouble(), 0.001)
+        // All rules present: (0.6*0.8 + 0.4*0.4) / (0.6+0.4) = (0.48 + 0.16) / 1.0 = 0.64
+        assertEquals(0.64, aggregator.computeRawConfidence(contributions, totalConfiguredWeight = 1.0f).toDouble(), 0.001)
+    }
+
+    // M-1: When a heavy rule is skipped, its weight still counts in the denominator.
+    // This prevents a lone R-03 with confidence=1.0 from locking globalConfidence at 100%.
+    @Test
+    fun `computeRawConfidence keeps absent rules in denominator so confidence is not inflated`() {
+        // Only R-03 (weight 0.25) present; full pipeline weight = 1.0
+        val contributions = listOf(
+            RuleContribution(weight = 0.25f, suspicionScore = 0.0f, confidence = 1.0f)
+        )
+        // New: (0.25*1.0) / 1.0 = 0.25  — NOT 1.0 as the old bug produced
+        assertEquals(0.25, aggregator.computeRawConfidence(contributions, totalConfiguredWeight = 1.0f).toDouble(), 0.001)
     }
 
     // AC-3: globalConfidence monotonically non-decreasing — simulated via orchestrator cycle.
@@ -82,10 +94,10 @@ class ScoreAggregatorTest {
     @Test
     fun `rawConfidence falling does not force existing peak down (ratchet property)`() {
         val highConfidence = aggregator.computeRawConfidence(
-            listOf(RuleContribution(1.0f, 0.0f, 0.9f))
+            listOf(RuleContribution(1.0f, 0.0f, 0.9f)), totalConfiguredWeight = 1.0f
         )
         val lowConfidence = aggregator.computeRawConfidence(
-            listOf(RuleContribution(1.0f, 0.0f, 0.2f))
+            listOf(RuleContribution(1.0f, 0.0f, 0.2f)), totalConfiguredWeight = 1.0f
         )
         // Simulate orchestrator ratchet: peak = max(prev, current)
         val peak = maxOf(highConfidence, lowConfidence)

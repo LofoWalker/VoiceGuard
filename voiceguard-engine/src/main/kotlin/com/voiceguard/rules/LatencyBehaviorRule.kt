@@ -22,7 +22,7 @@ import com.voiceguard.domain.port.AudioDetectionRule
 class LatencyBehaviorRule : AudioDetectionRule {
 
     override val name = "LatencyBehaviorRule"
-    override val weight = 0.40f
+    override val weight = 0.15f
     override val isHeavyAnalysis = true
 
     override suspend fun analyze(chunk: AudioChunk, context: ConversationContext): RuleResult {

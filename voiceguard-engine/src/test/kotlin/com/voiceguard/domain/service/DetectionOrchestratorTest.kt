@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -149,6 +150,72 @@ class DetectionOrchestratorTest {
         repeat(2) { orchestrator.processChunk(HALF_SECOND_CHUNK) }
 
         assertEquals(0.0f, orchestrator.state.value.aiProbability, "NaN guard must yield 0.0 not NaN")
+    }
+
+    // C-2: VAD records a speech switch on silence→speech crossing using audio-timeline timestamp.
+    // The switch is recorded AFTER rules run (ADR-03), so it becomes visible on the next chunk.
+    @Test
+    fun `silence-to-speech crossing records speech switch visible to rules on next chunk`() = runTest(dispatcher) {
+        val capturedSwitchCounts = mutableListOf<Int>()
+        val spyRule = object : AudioDetectionRule {
+            override val name = "SwitchSpy"
+            override val weight = 1.0f
+            override val isAlwaysActive = true
+            override suspend fun analyze(chunk: AudioChunk, context: ConversationContext): RuleResult {
+                capturedSwitchCounts += context.speechSwitchTimestamps.size
+                return RuleResult(0.0f, 0.0f)
+            }
+        }
+        val orchestrator = DetectionOrchestrator(listOf(spyRule), dispatcher)
+
+        // sampleRate=2 → each 1-sample chunk = 0.5s of audio.
+        val nonSilent = AudioChunk(FloatArray(1) { 0.5f }, sampleRate = 2)  // RMS=0.5 > 0.01 threshold
+        val silent    = AudioChunk(FloatArray(1) { 0.0f }, sampleRate = 2)  // RMS=0.0 < 0.01 threshold
+
+        orchestrator.processChunk(nonSilent)  // chunk 1: non-silent, no prior state → no crossing
+        orchestrator.processChunk(silent)     // chunk 2: non-silent→silent, no switch recorded
+        orchestrator.processChunk(nonSilent)  // chunk 3: silent→non-silent crossing; switch recorded AFTER rules run
+        orchestrator.processChunk(nonSilent)  // chunk 4: spy now sees the recorded switch
+
+        // Spy sees no switches during chunks 1–3 (switch recorded after chunk-3 rules complete)
+        // Spy sees exactly 1 switch during chunk 4
+        assertEquals(listOf(0, 0, 0, 1), capturedSwitchCounts,
+            "Speech switch must be invisible during crossing chunk and visible on the next one")
+    }
+
+    // C-2: Switch timestamp uses audio elapsed time, not wall-clock time.
+    // After 3 half-second chunks (1.5 s of audio) the timestamp must equal 1500 ms.
+    @Test
+    fun `speech switch timestamp reflects audio elapsed time not wall clock`() = runTest(dispatcher) {
+        val capturedTimestamps = mutableListOf<Long>()
+        val spyRule = object : AudioDetectionRule {
+            override val name = "TimestampSpy"
+            override val weight = 1.0f
+            override val isAlwaysActive = true
+            override suspend fun analyze(chunk: AudioChunk, context: ConversationContext): RuleResult {
+                capturedTimestamps += context.speechSwitchTimestamps.lastOrNull() ?: -1L
+                return RuleResult(0.0f, 0.0f)
+            }
+        }
+        val orchestrator = DetectionOrchestrator(listOf(spyRule), dispatcher)
+
+        // sampleRate=2, 1 sample = 0.5 s per chunk
+        val nonSilent = AudioChunk(FloatArray(1) { 0.5f }, sampleRate = 2)
+        val silent    = AudioChunk(FloatArray(1) { 0.0f }, sampleRate = 2)
+
+        orchestrator.processChunk(nonSilent)   // chunk 1 — 0.5 s elapsed
+        orchestrator.processChunk(silent)      // chunk 2 — 1.0 s elapsed
+        orchestrator.processChunk(nonSilent)   // chunk 3 — 1.5 s elapsed; switch recorded at 1500 ms
+        orchestrator.processChunk(nonSilent)   // chunk 4 — spy reads timestamp 1500 ms
+
+        // No switch during chunks 1–3; 1500 ms on chunk 4
+        assertEquals(-1L, capturedTimestamps[0])
+        assertEquals(-1L, capturedTimestamps[1])
+        assertEquals(-1L, capturedTimestamps[2])
+        assertEquals(1500L, capturedTimestamps[3], "Switch timestamp must equal audio elapsed ms (1500 ms)")
+
+        // Verify the timestamp is not a wall-clock value (would be many orders of magnitude larger)
+        assertFalse(capturedTimestamps[3] > 1_000_000_000L, "Timestamp must not be a wall-clock epoch ms")
     }
 
     // ADR-02: globalConfidence must never decrease between consecutive chunks.

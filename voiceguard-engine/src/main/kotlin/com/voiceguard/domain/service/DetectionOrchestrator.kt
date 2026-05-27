@@ -3,6 +3,8 @@ package com.voiceguard.domain.service
 import com.voiceguard.domain.context.ConversationContext
 import com.voiceguard.domain.model.AudioChunk
 import com.voiceguard.domain.model.DetectionUiState
+import com.voiceguard.domain.model.RuleDiagnostic
+import com.voiceguard.domain.model.RuleResult
 import com.voiceguard.domain.port.AudioDetectionRule
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -14,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlin.math.sqrt
 
 /**
  * Central orchestrator for real-time AI voice detection.
@@ -52,6 +53,7 @@ class DetectionOrchestrator(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val aggregator: ScoreAggregator = ScoreAggregator()
 ) {
+    private val totalRuleWeight = rules.sumOf { it.weight.toDouble() }.toFloat()
 
     private val context = ConversationContext()
 
@@ -70,6 +72,15 @@ class DetectionOrchestrator(
     private var previousSwitchCount = 0
     private var previousWindowMeanRms = 0f
     private var previousChunkWasSilent = false
+
+    // Set by detectTransition() when a silence→speech crossing is detected.
+    // Consumed in processChunk() after totalElapsedMicros is updated (ADR-03).
+    private var speechSwitchPending = false
+
+    // Per-rule observability: latest result each rule produced + which rules ran last chunk.
+    // Rules suppressed on the last chunk keep their previous result but report activeOnLastChunk=false.
+    private val lastResultByRule = HashMap<String, RuleResult>()
+    private var lastActiveRuleNames: Set<String> = emptySet()
 
     /**
      * Analyses one [AudioChunk], then emits an updated [DetectionUiState].
@@ -124,15 +135,24 @@ class DetectionOrchestrator(
 
             val allResults = alwaysActiveResults + phase2Results
 
-            // Context mutations strictly after all rules complete (ADR-03).
-            totalElapsedMicros += chunkDurationMicros
-            context.updateCallDuration(totalElapsedMicros / 1_000L)
-
             val contributions = allResults.map { (rule, result) ->
                 RuleContribution(rule.weight, result.suspicionScore, result.confidence)
             }
 
-            val rawConfidence = aggregator.computeRawConfidence(contributions)
+            // Record per-rule diagnostics for observability (rules that ran this chunk).
+            allResults.forEach { (rule, result) -> lastResultByRule[rule.name] = result }
+            lastActiveRuleNames = allResults.map { (rule, _) -> rule.name }.toSet()
+
+            // Context mutations strictly after all rules complete (ADR-03).
+            totalElapsedMicros += chunkDurationMicros
+            context.updateCallDuration(totalElapsedMicros / 1_000L)
+            // Record speech switch (detected before rules ran) using the audio-timeline timestamp
+            // so LatencyBehaviorRule measures real inter-turn intervals, not wall-clock drift.
+            if (speechSwitchPending) {
+                context.recordSpeechSwitch(totalElapsedMicros / 1_000L)
+            }
+
+            val rawConfidence = aggregator.computeRawConfidence(contributions, totalRuleWeight)
             peakConfidence = maxOf(peakConfidence, rawConfidence)
 
             val globalConfidence = if (totalElapsedMicros < 1_000_000L) 0.0f else peakConfidence
@@ -141,12 +161,6 @@ class DetectionOrchestrator(
 
             _state.value = DetectionUiState(globalConfidence, aiProbability, totalElapsedMicros / 1_000_000f)
         }
-    }
-
-    private fun computeRms(samples: FloatArray): Float {
-        if (samples.isEmpty()) return 0f
-        val sumSq = samples.sumOf { it.toDouble() * it.toDouble() }
-        return sqrt(sumSq / samples.size).toFloat()
     }
 
     private fun updateRmsWindow(rms: Float) {
@@ -186,9 +200,15 @@ class DetectionOrchestrator(
                 currentRms > previousWindowMeanRms * RMS_SPIKE_FACTOR
 
         // Trigger only on silence-state crossings, not on every silent chunk.
+        val wasSilent = previousChunkWasSilent
         val currentlySilent = currentRms < SILENCE_RMS_THRESHOLD
-        val silenceBoundaryCrossing = currentlySilent != previousChunkWasSilent
+        val silenceBoundaryCrossing = currentlySilent != wasSilent
         previousChunkWasSilent = currentlySilent
+
+        // A silence→speech crossing signals a new speaker turn.
+        // The switch is recorded in processChunk() after totalElapsedMicros is updated
+        // so the stored timestamp reflects the audio-timeline position (C-2).
+        speechSwitchPending = wasSilent && !currentlySilent
 
         return speechTurnDetected || energySpike || silenceBoundaryCrossing
     }
@@ -208,6 +228,24 @@ class DetectionOrchestrator(
 
         // RMS below this value = silence boundary event.
         private const val SILENCE_RMS_THRESHOLD = 0.01f
+    }
+
+    /**
+     * Returns the latest per-rule diagnostic for every configured rule, in declaration order.
+     *
+     * For each rule it reports the most recent suspicion/confidence it produced for this stream and
+     * whether it ran on the last chunk (false ⇒ suppressed by early-exit or intermittent sampling).
+     * A rule that has never run yet reports suspicion 0, confidence 0, inactive.
+     */
+    fun ruleDiagnostics(): List<RuleDiagnostic> = rules.map { rule ->
+        val last = lastResultByRule[rule.name]
+        RuleDiagnostic(
+            ruleName = rule.name,
+            weight = rule.weight,
+            suspicionScore = last?.suspicionScore ?: 0.0f,
+            confidence = last?.confidence ?: 0.0f,
+            activeOnLastChunk = rule.name in lastActiveRuleNames
+        )
     }
 
     /**
