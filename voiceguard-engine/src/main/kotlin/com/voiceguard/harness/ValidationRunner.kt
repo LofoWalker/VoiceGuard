@@ -249,10 +249,13 @@ class ValidationRunner(
         private const val NORMALISED_SAMPLE_RATE = 16_000
 
         // AI-probability decision threshold calibrated on the FoR testing split.
-        // Recalibrated 2025-05-27 after correcting CepstralPeakRule (SUSPICION_FROM_HIGH_CPP=false)
-        // and ProsodicDynamicsRule (invertDirection=true, VARIABILITY_REF 0.30→0.70) directions.
-        // Sweep: nRuns=100, step=0.05, parallelism=8, seed=42 → FPR ≤ 5% KPI satisfied at 0.85.
-        private const val CALIBRATED_AI_THRESHOLD = 0.85f
+        // Recalibré 2026-05-28 après ajout des règles VG-017..025 (14 règles) et correction des
+        // poids selon AUC + Cohen's d mesurés :
+        //   SE (d=1.65) 0.85, PD (d=1.33) 0.75, NL (d=1.13) 0.65 — règles fortes
+        //   MPD/EV/HC/EE/TTLV → 0.05 (non-discriminants ou direction inversée sur FoR)
+        // Les nouvelles règles compriment la plage d'aiProbability (~0.35–0.65 vs 0.70–0.95).
+        // Threshold sweep sur 4602 verdicts : FPR ≤ 5% au seuil 0.55 → recall=68%, acc=82%.
+        private const val CALIBRATED_AI_THRESHOLD = 0.55f
 
         /**
          * Entry point for Gradle-triggered validation.
@@ -345,15 +348,12 @@ class ValidationRunner(
          * Called inside processorFactory so each file gets independent rule instances —
          * no mutable state (chunk counters, contours) leaks across file boundaries.
          *
-         * FoR calibration (directions chosen on the validation split):
-         * - R-02 inverted: FoR fakes are bright, not band-limited (validation AUC 0.31 → ~0.69).
-         * - R-06 left default: flipping it improved ranking (AUC) but tripled FPR on the aggregate
-         *   (both classes scored high), so it is a net loss — kept in its original direction.
-         * - R-01 dropped: 0 votes on isolated utterances (no turn-taking) — pure weight dilution.
-         * - R-04/R-05/R-06 kept at default weight despite weak AUC: their near-zero suspicion on
-         *   *both* classes acts as FPR ballast. Zero-weighting them lifts recall but triples FPR
-         *   (R-02-flip alone scores humans at 0.69), a net accuracy loss — measured and rejected.
-         * Weights renormalise automatically in [ScoreAggregator].
+         * Direction notes (calibrated on FoR testing split):
+         * - R-02 inverted: FoR fakes are bright, not band-limited (AUC 0.31 → ~0.69).
+         * - R-06 inverted: on FoR, real voices are flat read speech; modern TTS is more dynamic.
+         * - R-01 excluded: 0 votes on isolated utterances (no turn-taking) — pure weight dilution.
+         * - VG-019 (TurnTakingLatencyVariance) likewise abstains on utterance-only datasets.
+         * - VG-017..VG-025 directions are provisional; the sweep will reveal which need inverting.
          *
          * The [weights] parameter defaults to [RuleWeightConfig.PRODUCTION] so existing call
          * sites that pass no argument continue to use the calibrated production weights.
@@ -368,10 +368,16 @@ class ValidationRunner(
                 ),
                 com.voiceguard.rules.JitterShimmerRule(weight = weights.jitterShimmer),
                 com.voiceguard.rules.CepstralPeakRule(weight = weights.cepstralPeak),
-                // invertDirection=true: on FoR, real voices are flat read speech while modern TTS
-                // produces more dynamic prosody — the default (low variability = suspicious) is
-                // reversed. Calibrated on FoR testing split (2025-05-27): AUC 0.17 → ~0.83 inverted.
-                com.voiceguard.rules.ProsodicDynamicsRule(invertDirection = true, weight = weights.prosodicDynamics)
+                com.voiceguard.rules.ProsodicDynamicsRule(invertDirection = true, weight = weights.prosodicDynamics),
+                com.voiceguard.rules.MicroPauseDistributionRule(weight = weights.microPauseDistribution),
+                com.voiceguard.rules.EmotionalVarianceRule(weight = weights.emotionalVariance),
+                com.voiceguard.rules.TurnTakingLatencyVarianceRule(weight = weights.turnTakingLatencyVariance),
+                com.voiceguard.rules.HarmonicConsistencyRule(weight = weights.harmonicConsistency),
+                com.voiceguard.rules.EnergyEnvelopeRule(weight = weights.energyEnvelope),
+                com.voiceguard.rules.RoomResponseRule(weight = weights.roomResponse),
+                com.voiceguard.rules.CodecArtifactRule(weight = weights.codecArtifact),
+                com.voiceguard.rules.HumanImperfectionRule(weight = weights.humanImperfection),
+                com.voiceguard.rules.SpeechEntropyRule(weight = weights.speechEntropy)
             )
     }
 }

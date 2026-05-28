@@ -174,11 +174,20 @@ data class WeightSweepSummary(
         println("RECOMMANDATION — pour appliquer la meilleure combinaison :")
         println("  Mettre à jour RuleWeightConfig.PRODUCTION dans RuleWeightConfig.kt :")
         with(best.weights) {
-            println("    noiseLinearity    = ${"%.2f".format(noiseLinearity)}f")
-            println("    spectralArtifacts = ${"%.2f".format(spectralArtifacts)}f")
-            println("    jitterShimmer     = ${"%.2f".format(jitterShimmer)}f")
-            println("    cepstralPeak      = ${"%.2f".format(cepstralPeak)}f")
-            println("    prosodicDynamics  = ${"%.2f".format(prosodicDynamics)}f")
+            println("    noiseLinearity             = ${"%.2f".format(noiseLinearity)}f")
+            println("    spectralArtifacts          = ${"%.2f".format(spectralArtifacts)}f")
+            println("    jitterShimmer              = ${"%.2f".format(jitterShimmer)}f")
+            println("    cepstralPeak               = ${"%.2f".format(cepstralPeak)}f")
+            println("    prosodicDynamics           = ${"%.2f".format(prosodicDynamics)}f")
+            println("    microPauseDistribution     = ${"%.2f".format(microPauseDistribution)}f")
+            println("    emotionalVariance          = ${"%.2f".format(emotionalVariance)}f")
+            println("    turnTakingLatencyVariance  = ${"%.2f".format(turnTakingLatencyVariance)}f")
+            println("    harmonicConsistency        = ${"%.2f".format(harmonicConsistency)}f")
+            println("    energyEnvelope             = ${"%.2f".format(energyEnvelope)}f")
+            println("    roomResponse               = ${"%.2f".format(roomResponse)}f")
+            println("    codecArtifact              = ${"%.2f".format(codecArtifact)}f")
+            println("    humanImperfection          = ${"%.2f".format(humanImperfection)}f")
+            println("    speechEntropy              = ${"%.2f".format(speechEntropy)}f")
         }
         println(sep)
     }
@@ -393,11 +402,20 @@ class WeightSweepRunner(
         while (result.size < nRuns && attempts < maxAttempts) {
             attempts++
             val w = RuleWeightConfig(
-                noiseLinearity    = levels.random(rng),
-                spectralArtifacts = levels.random(rng),
-                jitterShimmer     = levels.random(rng),
-                cepstralPeak      = levels.random(rng),
-                prosodicDynamics  = levels.random(rng)
+                noiseLinearity            = levels.random(rng),
+                spectralArtifacts         = levels.random(rng),
+                jitterShimmer             = levels.random(rng),
+                cepstralPeak              = levels.random(rng),
+                prosodicDynamics          = levels.random(rng),
+                microPauseDistribution    = levels.random(rng),
+                emotionalVariance         = levels.random(rng),
+                turnTakingLatencyVariance = levels.random(rng),
+                harmonicConsistency       = levels.random(rng),
+                energyEnvelope            = levels.random(rng),
+                roomResponse              = levels.random(rng),
+                codecArtifact             = levels.random(rng),
+                humanImperfection         = levels.random(rng),
+                speechEntropy             = levels.random(rng)
             )
             if (seen.add(w.toString())) result.add(w)
         }
