@@ -16,12 +16,12 @@ import kotlin.math.ln
  * - The temporal sample distribution is tighter than for natural speech (low temporal entropy).
  *
  * Two entropy measures, combined:
- * 1. **Spectral entropy**: −Σ p(k) ln p(k) over the normalised magnitude spectrum. Lower for
+ * 1. **Spectral entropy**: −Σ p(k) ln p(k) over the normalized magnitude spectrum. Lower for
  *    clean TTS (energy concentrated in harmonic peaks vs. more distributed for natural noise).
  * 2. **Temporal entropy**: derived from the sample amplitude histogram within the chunk. Lower
  *    for TTS (tighter amplitude distribution due to smooth synthesis).
  *
- * Both are normalised by their theoretical maximum (uniform distribution) so the score is
+ * Both are normalized by their theoretical maximum (uniform distribution) so the score is
  * invariant to chunk length and sample rate.
  *
  * Low combined entropy → high suspicion.

@@ -353,7 +353,8 @@ class ValidationRunner(
          * - R-06 inverted: on FoR, real voices are flat read speech; modern TTS is more dynamic.
          * - R-01 excluded: 0 votes on isolated utterances (no turn-taking) — pure weight dilution.
          * - VG-019 (TurnTakingLatencyVariance) likewise abstains on utterance-only datasets.
-         * - VG-017..VG-025 directions are provisional; the sweep will reveal which need inverting.
+         * - VG-017 inverted (2026-05-28): FoR TTS has more varied pauses than read human speech
+         *   (AUC=0.41 without inversion → estimated ~0.59 with inversion, d=−0.52 → +0.52).
          *
          * The [weights] parameter defaults to [RuleWeightConfig.PRODUCTION] so existing call
          * sites that pass no argument continue to use the calibrated production weights.
@@ -369,7 +370,7 @@ class ValidationRunner(
                 com.voiceguard.rules.JitterShimmerRule(weight = weights.jitterShimmer),
                 com.voiceguard.rules.CepstralPeakRule(weight = weights.cepstralPeak),
                 com.voiceguard.rules.ProsodicDynamicsRule(invertDirection = true, weight = weights.prosodicDynamics),
-                com.voiceguard.rules.MicroPauseDistributionRule(weight = weights.microPauseDistribution),
+                com.voiceguard.rules.MicroPauseDistributionRule(invertDirection = true, weight = weights.microPauseDistribution),
                 com.voiceguard.rules.EmotionalVarianceRule(weight = weights.emotionalVariance),
                 com.voiceguard.rules.TurnTakingLatencyVarianceRule(weight = weights.turnTakingLatencyVariance),
                 com.voiceguard.rules.HarmonicConsistencyRule(weight = weights.harmonicConsistency),

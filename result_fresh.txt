@@ -5,7 +5,7 @@ Path for java installation '/usr/lib/jvm/openjdk-21' (Common Linux Locations) do
 > Task :voiceguard-engine:processResources NO-SOURCE
 > Task :voiceguard-engine:classes UP-TO-DATE
 
-> Task :voiceguard-engine:validateEngine FAILED
+> Task :voiceguard-engine:validateEngine
 ============================================================
 VOICEGUARD VALIDATION REPORT
 ============================================================
@@ -13,14 +13,14 @@ Total files evaluated : 4634
 Countable verdicts    : 4602
 
 DETECTION METRICS
-  Accuracy          : 80,1%  (cible ≥ 85%)
-  False positive rate: 18,1%  (cible ≤ 5%)
-  Recall (AI det.)  : 78,3%
+  Accuracy          : 81,5%  (cible ≥ 85%)
+  False positive rate: 4,1%  (cible ≤ 5%)
+  Recall (AI det.)  : 67,6%
 
 MATRICE DE CONFUSION
                     Prédit HUMAN   Prédit AI
-  Réel HUMAN                1853         409
-  Réel AI                    508        1832
+  Réel HUMAN                2170          92
+  Réel AI                    759        1581
 
 ANALYSE PAR RÈGLE — pouvoir discriminant (votes réels sur verdicts exploitables)
   Règle                    Poids  n IA/HUM   IA±σ          HUM±σ          AUC     d       Seuil   Préc.   Verdict
@@ -29,7 +29,7 @@ ANALYSE PAR RÈGLE — pouvoir discriminant (votes réels sur verdicts exploitab
   JitterShimmerRule         0,25  413/1359   0,04±0,09     0,02±0,07       0,57   +0,31   0,04    77%   FAIBLE
   CepstralPeakRule          0,20  1271/2230  0,95±0,03     0,94±0,04       0,56   +0,37   0,98    66%   FAIBLE
   ProsodicDynamicsRule      0,75  2340/2262  0,60±0,18     0,38±0,15       0,85   +1,35   0,42    81%   FORT
-  MicroPauseDistributionRule  0,40  2317/2262  1,00±0,01     0,97±0,09       0,59   +0,52   1,00    59%   FAIBLE
+  MicroPauseDistributionRule  0,05  2317/2262  0,00±0,01     0,03±0,09       0,41   -0,52  -0,00    51%   INVERSER
   EmotionalVarianceRule     0,05  1154/1939  0,66±0,23     0,67±0,26       0,45   -0,04   1,00    63%   FAIBLE
   TurnTakingLatencyVarianceRule  0,05  0/0        N/A           N/A              N/A     N/A    N/A    N/A   n/a
   HarmonicConsistencyRule   0,05  503/1567   0,00±0,02     0,00±0,01       0,50   +0,02   0,37    76%   FAIBLE
@@ -45,31 +45,33 @@ BALAYAGE DU SEUIL DE DÉCISION (sur verdicts exploitables — calibrer sur valid
   Seuil   Accuracy   FPR     Recall
    0,05       51%     100%    100%
    0,10       51%     100%    100%
-   0,15       51%     100%    100%
-   0,20       51%      99%    100%
-   0,25       53%      95%    100%
-   0,30       60%      80%     99%
-   0,35       72%      50%     93%
-   0,40       75%      35%     85%
-   0,45       75%      33%     82%
-   0,50       75%      31%     81%
-   0,55       80%      18%     78%
-   0,60       79%       3%     63%
-   0,65       63%       1%     27%
-   0,70       54%       0%     10%
-   0,75       50%       0%      2%
+   0,15       56%      90%    100%
+   0,20       67%      66%    100%
+   0,25       75%      50%     99%
+   0,30       78%      37%     92%
+   0,35       76%      33%     86%
+   0,40       75%      32%     82%
+   0,45       75%      31%     81%
+   0,50       80%      18%     79%
+   0,55       82%       4%     68%
+   0,60       67%       1%     36%
+   0,65       56%       0%     14%
+   0,70       51%       0%      4%
+   0,75       49%       0%      0%
    0,80       49%       0%      0%
    0,85       49%       0%      0%
    0,90       49%       0%      0%
    0,95       49%       0%      0%
-  → Accuracy max : seuil 0,55 ⇒ acc 80%, FPR 18%, recall 78%
-  → FPR ≤ 5% : seuil 0,60 ⇒ acc 79%, FPR 3%, recall 63%
+  → Accuracy max : seuil 0,55 ⇒ acc 82%, FPR 4%, recall 68%
+  → FPR ≤ 5% : seuil 0,55 ⇒ acc 82%, FPR 4%, recall 68%
 
 LATENCE
-  Moyenne par chunk : 0,86 ms
-  Max par chunk     : 18 ms
+  Moyenne par chunk : 0,87 ms
+  Max par chunk     : 17 ms
   Violations budget 50 ms : 0
 
-Fichiers mal classés : 947  (relancer avec -v ou ./gradlew … -Pverbose pour le détail)
+Fichiers mal classés : 881  (relancer avec -v ou ./gradlew … -Pverbose pour le détail)
 ============================================================
+
+> Task :voiceguard-engine:validateEngine FAILED
 2 actionable tasks: 1 executed, 1 up-to-date

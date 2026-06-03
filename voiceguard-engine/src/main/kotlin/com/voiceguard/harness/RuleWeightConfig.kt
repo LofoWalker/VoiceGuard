@@ -96,7 +96,10 @@ data class RuleWeightConfig(
         const val DEFAULT_PROSODIC_DYNAMICS:  Float = 0.75f
 
         // ── VG-017..VG-025 — poids d'après AUC + Cohen's d sur FoR testing split ──
-        const val DEFAULT_MICRO_PAUSE_DISTRIBUTION:    Float = 0.05f  // d=-0.52 : direction inversée
+        // MPD: direction inversée (2026-05-28). Score sature à ~1.0 pour les deux classes car
+        // DENSITY_VARIANCE_REF/PAUSE_VARIANCE_REF << variances réelles sur FoR → poids minimal.
+        // L'inversion est confirmée (AUC=0.59, d=+0.52) ; le sweep déterminera le poids optimal.
+        const val DEFAULT_MICRO_PAUSE_DISTRIBUTION:    Float = 0.05f  // sature → contribution marginale
         const val DEFAULT_EMOTIONAL_VARIANCE:          Float = 0.05f  // d=-0.04 : bruit
         const val DEFAULT_TURN_TAKING_LATENCY_VARIANCE: Float = 0.05f // abstient sur FoR
         const val DEFAULT_HARMONIC_CONSISTENCY:        Float = 0.05f  // score=0 pour les deux classes

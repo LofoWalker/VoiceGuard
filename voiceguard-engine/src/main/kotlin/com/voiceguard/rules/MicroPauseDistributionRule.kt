@@ -20,14 +20,19 @@ import kotlin.math.sqrt
  * 2. **Pause duration variance** — how much individual pause run-lengths vary.
  *    TTS pauses cluster tightly; human hesitations are irregular.
  *
- * Low variance on both → high suspicion.
+ * Low variance on both → high suspicion (default direction).
+ *
+ * [invertDirection] reverses the score for corpora (e.g. FoR read-speech) where TTS produces
+ * *more* varied pauses than the (flat, read) human samples — calibrated on the FoR testing split
+ * (AUC=0.41, d=−0.52 without inversion → AUC≈0.59 with inversion).
  *
  * Not [isHeavyAnalysis]: must run on every chunk to build an accurate pause distribution.
  */
 class MicroPauseDistributionRule(
     override val weight: Float = 0.50f,
     private val silenceThreshold: Float = 0.015f,
-    private val framesPerChunk: Int = 32
+    private val framesPerChunk: Int = 32,
+    private val invertDirection: Boolean = false
 ) : AudioDetectionRule {
 
     override val name = "MicroPauseDistributionRule"
@@ -67,8 +72,12 @@ class MicroPauseDistributionRule(
         val densityVariance = sampleVariance(silenceDensities)
         val pauseVariance = if (pauseDurations.size >= 2) sampleVariance(pauseDurations) else FALLBACK_VARIANCE
 
-        val densityScore = (1f - (densityVariance / DENSITY_VARIANCE_REF).coerceAtMost(1f)).coerceIn(0f, 1f)
-        val pauseScore = (1f - (pauseVariance / PAUSE_VARIANCE_REF).coerceAtMost(1f)).coerceIn(0f, 1f)
+        val densityRaw = (densityVariance / DENSITY_VARIANCE_REF).coerceAtMost(1f).coerceIn(0f, 1f)
+        val pauseRaw   = (pauseVariance   / PAUSE_VARIANCE_REF).coerceAtMost(1f).coerceIn(0f, 1f)
+
+        // Default: low variance (uniform) → suspicious. Inverted: high variance → suspicious.
+        val densityScore = if (invertDirection) densityRaw else 1f - densityRaw
+        val pauseScore   = if (invertDirection) pauseRaw   else 1f - pauseRaw
 
         return RuleResult((densityScore + pauseScore) / 2f, confidence)
     }
